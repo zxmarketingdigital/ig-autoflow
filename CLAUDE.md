@@ -30,7 +30,7 @@
 - **Pré-requisito:** Semanas 1-4 concluídas (phase_completed >= 4)
 - **Pasta base:** `~/.operacao-ia/`
 - **Scripts IG:** `~/.operacao-ia/scripts/instagram/`
-- **Repo local:** `~/snappy-panda/`
+- **Repo local:** `~/ig-autoflow/`
 
 ## Fluxo das 10 Etapas
 
