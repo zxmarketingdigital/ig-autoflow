@@ -6,22 +6,20 @@ Encerramento oficial da Semana 5.
 
 import json
 import sys
-import threading
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
 
+import session_logger
 from lib import (
     CHECKPOINT_PATH_S5,
     DATA_DIR,
-    PLATFORM,
-    SESSION_LOGS_DIR,
     load_config,
     mark_checkpoint,
     now_iso,
@@ -29,142 +27,6 @@ from lib import (
 )
 
 PENDING_PATH = DATA_DIR / "logs" / "pending_push_s5.json"
-
-
-# ---------------------------------------------------------------------------
-# session_logger (inline, adaptado para S5)
-# ---------------------------------------------------------------------------
-
-def _parse_iso(ts_str):
-    if not ts_str:
-        return None
-    try:
-        return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-
-def collect(checkpoint_path):
-    checkpoint_path = Path(checkpoint_path)
-    checkpoints = {}
-    errors = []
-    timestamps = []
-
-    if checkpoint_path.exists():
-        try:
-            raw = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                data = raw.get("steps", raw)
-                for step, info in data.items():
-                    if isinstance(info, dict):
-                        status = info.get("status", "pending")
-                        detail = info.get("detail", "")
-                        updated_at = info.get("updated_at", "")
-                        checkpoints[step] = {"status": status, "detail": detail, "updated_at": updated_at}
-                        if status != "done":
-                            errors.append({"step": step, "detail": detail or status})
-                        ts = _parse_iso(updated_at)
-                        if ts:
-                            timestamps.append(ts)
-        except Exception as e:
-            errors.append({"step": "_checkpoint_load", "detail": str(e)})
-
-    finished_dt = datetime.now()
-    finished_at = now_iso()
-
-    if timestamps:
-        started_dt = min(timestamps)
-        started_at = started_dt.isoformat()
-        duration_seconds = int((finished_dt - started_dt).total_seconds())
-    else:
-        started_at = finished_at
-        duration_seconds = 0
-
-    return {
-        "started_at": started_at,
-        "finished_at": finished_at,
-        "duration_seconds": duration_seconds,
-        "checkpoints": checkpoints,
-        "errors": errors,
-        "platform": PLATFORM,
-    }
-
-
-def ask_feedback():
-    prompt = "  O que voce gostaria nos proximos Setups? "
-    feedback = [""]
-    done = threading.Event()
-
-    def _input_thread():
-        try:
-            feedback[0] = input(prompt)
-        except (EOFError, KeyboardInterrupt):
-            feedback[0] = ""
-        except Exception:
-            feedback[0] = ""
-        finally:
-            done.set()
-
-    t = threading.Thread(target=_input_thread, daemon=True)
-    t.start()
-    got_input = done.wait(timeout=60)
-    if not got_input:
-        print("\n  (Timeout — continuando sem feedback)")
-    return feedback[0]
-
-
-def write_session(session_data, feedback):
-    SESSION_LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    now_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    base_name = f"session-s5-{now_str}"
-
-    payload = dict(session_data)
-    payload["feedback"] = feedback
-
-    json_path = SESSION_LOGS_DIR / f"{base_name}.json"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    md_path = SESSION_LOGS_DIR / f"{base_name}.md"
-    dur = session_data.get("duration_seconds", 0)
-    dur_min, dur_sec = dur // 60, dur % 60
-    checkpoints = session_data.get("checkpoints", {})
-    done_count = sum(1 for v in checkpoints.values() if isinstance(v, dict) and v.get("status") == "done")
-    total_count = max(len(checkpoints), 10)
-
-    started_at = session_data.get("started_at", "")
-    try:
-        dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-        data_legivel = dt.strftime("%d/%m/%Y %H:%M")
-    except Exception:
-        data_legivel = started_at
-
-    table_rows = []
-    for step, info in checkpoints.items():
-        status = info.get("status", "pending") if isinstance(info, dict) else str(info)
-        detail = info.get("detail", "") if isinstance(info, dict) else ""
-        icon = "OK" if status == "done" else "PENDENTE"
-        table_rows.append(f"| {step} | {icon} | {detail} |")
-
-    table_body = "\n".join(table_rows) if table_rows else "| — | — | — |"
-
-    md_content = f"""# Log Sessao S5 — {data_legivel}
-
-**Plataforma:** {session_data.get('platform', 'unknown')}
-**Duracao:** {dur_min}min {dur_sec}s
-**Etapas concluidas:** {done_count}/{total_count}
-
-## Checkpoints
-
-| Etapa | Status | Detalhe |
-|-------|--------|---------|
-{table_body}
-
-## Feedback
-
-{feedback if feedback else "(sem feedback)"}
-"""
-    md_path.write_text(md_content, encoding="utf-8")
-    return json_path, md_path
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +133,7 @@ def main():
     print("  [1/6] Coletar dados da sessao")
     _sep()
 
-    session_data = collect(CHECKPOINT_PATH_S5)
+    session_data = session_logger.collect(CHECKPOINT_PATH_S5)
 
     dur_min = session_data["duration_seconds"] // 60
     dur_sec = session_data["duration_seconds"] % 60
@@ -299,7 +161,7 @@ def main():
 
     feedback = ""
     try:
-        feedback = ask_feedback()
+        feedback = session_logger.ask_feedback()
     except Exception as e:
         print(f"  (Feedback ignorado: {e})")
 
@@ -308,7 +170,7 @@ def main():
     print("  [3/6] Salvar log (JSON + MD)")
     _sep()
 
-    json_path, md_path = write_session(session_data, feedback)
+    json_path, md_path = session_logger.write(session_data, feedback)
     print(f"  JSON: {json_path}")
     print(f"  MD  : {md_path}")
 

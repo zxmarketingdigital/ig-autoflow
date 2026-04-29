@@ -33,7 +33,7 @@ def collect(checkpoint_path):
         try:
             raw = json.loads(checkpoint_path.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
-                data = raw.get("checkpoints", raw)
+                data = raw.get("steps") if isinstance(raw.get("steps"), dict) else raw.get("checkpoints", {})
                 for step, info in data.items():
                     if isinstance(info, dict):
                         status = info.get("status", "pending")

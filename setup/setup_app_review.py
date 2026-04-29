@@ -93,16 +93,22 @@ def load_app_id():
     return load_env_var(IG_ENV_PATH, "IG_APP_ID_INSTAGRAM") or "SEU_APP_ID"
 
 
-def get_first_media_id(token):
+def get_first_media_id_with_comments(token):
+    """Retorna (media_id, comments_count) do primeiro post com comentarios confirmados."""
     data, err = _ig_get("/me/media", token)
     if err or not data:
-        return None
+        return None, 0
+    for post in data.get("data", []):
+        count = int(post.get("comments_count", 0))
+        if count > 0:
+            return post["id"], count
+    # fallback: primeiro post mesmo sem comentarios
     posts = data.get("data", [])
-    return posts[0]["id"] if posts else None
+    return (posts[0]["id"], 0) if posts else (None, 0)
 
 
-def check_live_mode(media_id, token):
-    """Retorna True se comentarios reais sao retornados (app esta em Live)."""
+def check_live_mode(media_id, expected_count, token):
+    """Retorna True se comentarios sao retornados (app em Live). So e diagnostico se expected_count > 0."""
     data, err = _ig_get(f"/{media_id}/comments", token)
     if err:
         return False
@@ -122,7 +128,12 @@ def run_live_validation(token, user_id, media_id):
         all_ok = False
     else:
         comments = data.get("data", [])
-        print(f"  [OK] {len(comments)} comentario(s) lido(s).")
+        if len(comments) == 0 and expected_count > 0:
+            print(f"  [FALHA] Post tem {expected_count} comentarios mas API retornou 0.")
+            print("  App ainda em Development mode. Aguarde a aprovacao e tente novamente.")
+            all_ok = False
+        else:
+            print(f"  [OK] {len(comments)} comentario(s) lido(s).")
 
     print("  Teste L2: Lendo conversations...")
     data2, err2 = _ig_get(f"/{user_id}/conversations", token)
@@ -156,14 +167,14 @@ def main():
     user_id = load_user_id()
     app_id = load_app_id()
 
-    media_id = get_first_media_id(token)
+    media_id, expected_count = get_first_media_id_with_comments(token)
     if not media_id:
         print("  [ERRO] Nenhum post encontrado. Publique ao menos 1 post no Instagram.")
         sys.exit(1)
 
     # Verificar se ja esta em modo Live
     print("  Verificando se app ja esta em modo Live...")
-    if check_live_mode(media_id, token):
+    if check_live_mode(media_id, expected_count, token):
         print("  [OK] App ja esta em modo Live! Pulando para validacao final.")
         print()
     else:

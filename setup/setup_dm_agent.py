@@ -59,9 +59,13 @@ def check_omniroute(url):
 def try_install_omniroute():
     try:
         import importlib.util
-        if importlib.util.find_spec("omniroute_check") is not None:
-            import omniroute_check
-            omniroute_check.check_or_install()
+        spec = importlib.util.spec_from_file_location(
+            "omniroute_check", ROOT_DIR / "scripts" / "omniroute_check.py"
+        )
+        if spec:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.check_or_install()
             return True
     except Exception as e:
         print(f"  [AVISO] omniroute_check nao disponivel: {e}")
@@ -134,6 +138,39 @@ def _write_plist(plist_name, python_path, script_path, interval, log_path):
     return dest
 
 
+def _write_token_plist(python_path, script_path, log_path):
+    content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zxlab.ig-token</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{python_path}</string>
+        <string>{script_path}</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_path}</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>"""
+    dest = LAUNCH_AGENTS_DIR / "com.zxlab.ig-token.plist"
+    LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return dest
+
+
 def install_launchagents(cadencia):
     python_path = shutil.which("python3") or "python3"
     logs_dir = INSTAGRAM_DIR / "logs"
@@ -146,7 +183,6 @@ def install_launchagents(cadencia):
     token_log = logs_dir / "ig-token.log"
 
     interval_dm = cadencia * 60
-    interval_token = 86400  # diario
 
     if PLATFORM == "Darwin":
         plist_dm = _write_plist("com.zxlab.ig-dm.plist", python_path, str(dm_agent_path), interval_dm, str(dm_log))
@@ -157,7 +193,7 @@ def install_launchagents(cadencia):
         except subprocess.CalledProcessError as e:
             print(f"  [AVISO] launchctl load ig-dm falhou: {e}")
 
-        plist_token = _write_plist("com.zxlab.ig-token.plist", python_path, str(token_refresher_path), interval_token, str(token_log))
+        plist_token = _write_token_plist(python_path, str(token_refresher_path), str(token_log))
         try:
             subprocess.run(["launchctl", "unload", str(plist_token)], capture_output=True)
             subprocess.run(["launchctl", "load", str(plist_token)], check=True, capture_output=True)
@@ -232,11 +268,13 @@ def main():
     # Salvar config
     save_dm_config(omniroute_url, model_main, model_fallback, evo_url, evo_instance, whatsapp_num, cadencia)
 
-    # Salvar credenciais Evolution no .env
-    append_to_env("EVOLUTION_URL", evo_url)
+    # Salvar credenciais no .env
+    append_to_env("OMNIROUTE_URL", omniroute_url)
+    append_to_env("DM_MODEL", model_main)
+    append_to_env("EVOLUTION_BASE", evo_url)
     append_to_env("EVOLUTION_INSTANCE", evo_instance)
-    append_to_env("WHATSAPP_ESCALATION_NUMBER", whatsapp_num)
-    print("  [OK] Credenciais Evolution salvas em instagram.env.")
+    append_to_env("USER_WHATSAPP_NUMBER", whatsapp_num)
+    print("  [OK] Credenciais salvas em instagram.env.")
     print()
 
     # 6f: Instalar LaunchAgents

@@ -24,14 +24,22 @@ def refresh_token(token):
 
 def update_env(new_token):
     lines = []
+    saw_token = False
+    saw_generated_at = False
     if IG_ENV_PATH.exists():
         for line in IG_ENV_PATH.read_text(encoding="utf-8").splitlines():
             if line.startswith("IG_ACCESS_TOKEN="):
                 lines.append(f"IG_ACCESS_TOKEN={new_token}")
+                saw_token = True
             elif line.startswith("IG_TOKEN_GENERATED_AT="):
                 lines.append(f"IG_TOKEN_GENERATED_AT={datetime.now().strftime('%Y-%m-%d')}")
+                saw_generated_at = True
             else:
                 lines.append(line)
+    if not saw_token:
+        lines.append(f"IG_ACCESS_TOKEN={new_token}")
+    if not saw_generated_at:
+        lines.append(f"IG_TOKEN_GENERATED_AT={datetime.now().strftime('%Y-%m-%d')}")
     IG_ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

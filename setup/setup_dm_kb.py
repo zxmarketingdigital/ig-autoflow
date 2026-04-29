@@ -56,11 +56,15 @@ def ask_multiline(prompt):
 def collect_products():
     produtos = []
 
-    try:
+    while True:
         qty_str = ask("Quantos produtos quer cadastrar?", default="1")
-        qty = int(qty_str) if qty_str.isdigit() else 1
-    except Exception:
-        qty = 1
+        try:
+            qty = int(qty_str)
+            if qty >= 1:
+                break
+            print("  Cadastre ao menos 1 produto.")
+        except (ValueError, TypeError):
+            print("  Valor invalido. Digite um numero inteiro maior que 0.")
 
     for i in range(1, qty + 1):
         print()
@@ -72,10 +76,10 @@ def collect_products():
         bonus = ask(f"Bonus do produto #{i} (opcional, Enter para pular)", default="")
 
         produtos.append({
-            "nome": nome,
+            "name": nome,
             "url": url,
-            "descricao": descricao,
-            "preco": preco,
+            "description": descricao,
+            "price": preco,
             "bonus": bonus,
         })
         print(f"  [OK] Produto '{nome}' cadastrado.")
@@ -107,16 +111,16 @@ def save_kb(produtos):
         "# Gerado automaticamente pelo setup da Semana 5.",
         "# Edite para atualizar seus produtos/servicos.",
         "",
-        "PRODUTOS = [",
+        "PRODUCTS = [",
     ]
     for p in produtos:
-        descricao_escaped = p["descricao"].replace('"""', "'''")
+        desc_escaped = p["description"].replace('"""', "'''")
         lines.append("    {")
-        lines.append(f'        "nome": {repr(p["nome"])},')
+        lines.append(f'        "name": {repr(p["name"])},')
         lines.append(f'        "url": {repr(p["url"])},')
-        lines.append(f'        "preco": {repr(p["preco"])},')
+        lines.append(f'        "description": """{desc_escaped}""",')
+        lines.append(f'        "price": {repr(p["price"])},')
         lines.append(f'        "bonus": {repr(p["bonus"])},')
-        lines.append(f'        "descricao": """{descricao_escaped}""",')
         lines.append("    },")
     lines.append("]")
     lines.append("")

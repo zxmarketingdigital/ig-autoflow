@@ -64,14 +64,14 @@ def collect_keywords():
             break
 
         link = ask(f"URL/link de destino para '{keyword}'")
-        reply_public = ask(f"Mensagem do reply publico no comentario")
-        dm_private = ask(f"Mensagem da DM (Private Reply)")
+        reply_text = ask(f"Mensagem do reply publico no comentario")
+        dm_text = ask(f"Mensagem da DM (Private Reply)")
 
         triggers.append({
-            "keyword": keyword.lower().strip(),
-            "link": link,
-            "reply_public": reply_public,
-            "dm_private": dm_private,
+            "keywords": [keyword.lower().strip()],
+            "url": link,
+            "reply_text": reply_text,
+            "dm_text": dm_text,
         })
         print(f"  [OK] Palavra-chave '{keyword}' cadastrada.")
         print()
@@ -85,14 +85,9 @@ def collect_keywords():
     return triggers
 
 
-def save_triggers(triggers, cadencia):
-    data = {
-        "triggers": triggers,
-        "cadencia_minutos": cadencia,
-        "updated_at": "",
-    }
+def save_triggers(triggers):
     INSTAGRAM_DIR.mkdir(parents=True, exist_ok=True)
-    IG_TRIGGERS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    IG_TRIGGERS_PATH.write_text(json.dumps(triggers, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  [OK] ig_triggers.json salvo: {len(triggers)} keyword(s).")
 
 
@@ -218,14 +213,18 @@ def dry_run(triggers, token):
     except Exception:
         comments = []
 
-    keywords = [t["keyword"] for t in triggers]
     print(f"  Dry-run em {len(comments)} comentario(s) recentes (sem enviar nada):")
     print()
     for c in comments:
         text = c.get("text", "").lower()
-        matched = [kw for kw in keywords if kw in text]
-        if matched:
-            print(f"    DISPARARIA para: \"{c.get('text', '')[:60]}\" → keywords: {matched}")
+        matched_trigger = None
+        for t in triggers:
+            if any(kw.lower() in text for kw in t.get("keywords", [])):
+                matched_trigger = t
+                break
+        if matched_trigger:
+            kws = matched_trigger["keywords"]
+            print(f"    DISPARARIA para: \"{c.get('text', '')[:60]}\" → keywords: {kws}")
         else:
             print(f"    Sem match: \"{c.get('text', '')[:60]}\"")
     if not comments:
@@ -251,16 +250,19 @@ def main():
     triggers = collect_keywords()
     print()
 
-    cadencia_str = ask("Cadencia em minutos (5-60)", default="30")
-    try:
-        cadencia = int(cadencia_str)
-        cadencia = max(5, min(60, cadencia))
-    except ValueError:
-        cadencia = 30
+    while True:
+        cadencia_str = ask("Cadencia em minutos (5-60)", default="30")
+        try:
+            cadencia = int(cadencia_str)
+            if 5 <= cadencia <= 60:
+                break
+            print("  Valor fora do range. Digite um numero entre 5 e 60.")
+        except ValueError:
+            print("  Valor invalido. Digite um numero inteiro entre 5 e 60.")
     print(f"  [OK] Cadencia: {cadencia} minutos.")
     print()
 
-    save_triggers(triggers, cadencia)
+    save_triggers(triggers)
     save_state()
     copy_responder()
     print()

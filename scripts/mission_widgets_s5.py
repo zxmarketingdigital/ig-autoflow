@@ -23,11 +23,19 @@ def _count_log_pattern(log_file, pattern, hours=24):
     p = Path(log_file)
     if not p.exists():
         return 0
-    cutoff = datetime.now().timestamp() - hours * 3600
+    cutoff_ts = datetime.now().timestamp() - hours * 3600
     count = 0
     for line in p.read_text(encoding="utf-8").splitlines():
-        if pattern in line:
-            count += 1
+        if pattern not in line:
+            continue
+        # extrai timestamp ISO do inicio da linha: [2026-04-29T20:01:00]
+        try:
+            ts_str = line[1:line.index("]")]
+            ts = datetime.fromisoformat(ts_str).timestamp()
+            if ts >= cutoff_ts:
+                count += 1
+        except Exception:
+            count += 1  # linha sem timestamp conta sempre
     return count
 
 
@@ -47,7 +55,7 @@ def get_widgets():
     auto_log = INSTAGRAM_DIR / "logs" / "ig-auto.log"
     dm_log = INSTAGRAM_DIR / "logs" / "ig-dm.log"
 
-    comments_processed = _count_log_pattern(auto_log, "comment_id processado")
+    comments_processed = _count_log_pattern(auto_log, "[OK] Private Reply DM enviada")
     auto_errors = _count_log_pattern(auto_log, "[ERRO]")
     auto_last = _last_log_line(auto_log)
 

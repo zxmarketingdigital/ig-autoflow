@@ -132,6 +132,7 @@ def main(dry_run=False):
                     log(f"  [ERRO] Private Reply falhou: {e}")
             else:
                 log(f"  [DRY-RUN] Dispararia reply + DM para comment_id={cid}")
+                continue
 
             processed.add(cid)
             total_processed += 1
