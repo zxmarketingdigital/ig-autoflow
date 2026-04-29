@@ -30,7 +30,7 @@
 - **Pré-requisito:** Semanas 1-4 concluídas (phase_completed >= 4)
 - **Pasta base:** `~/.operacao-ia/`
 - **Scripts IG:** `~/.operacao-ia/scripts/instagram/`
-- **Repo local:** `~/zx-control-semana5/`
+- **Repo local:** `~/snappy-panda/`
 
 ## Fluxo das 10 Etapas
 
