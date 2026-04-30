@@ -10,6 +10,7 @@ Uso:
     python3 ig_dashboard.py --open     # gera e abre no navegador
 """
 
+import html
 import json
 import re
 import subprocess
@@ -188,7 +189,7 @@ def render():
     comments_24h = _count_pattern(auto_lines, "Private Reply DM enviada")
     auto_errors_24h = _count_pattern(auto_lines, "[ERRO]")
     auto_last_ts = _last_run_ts(auto_lines)
-    auto_last_line = _last_log_line(auto_lines)
+    auto_last_line = html.escape(_last_log_line(auto_lines))
     auto_status = _agent_status("com.zxlab.ig-auto")
 
     # DM Agent
@@ -196,7 +197,7 @@ def render():
     escalations_24h = _count_pattern(dm_lines, "Escalando")
     dm_errors_24h = _count_pattern(dm_lines, "[ERRO]")
     dm_last_ts = _last_run_ts(dm_lines)
-    dm_last_line = _last_log_line(dm_lines)
+    dm_last_line = html.escape(_last_log_line(dm_lines))
     dm_status = _agent_status("com.zxlab.ig-dm")
 
     # Token
@@ -246,8 +247,8 @@ def render():
         for p in products
     ) or '<tr><td colspan="2" class="empty">Nenhum produto na base</td></tr>'
 
-    auto_errs_html = "".join(f'<li class="mono">{e}</li>' for e in auto_errs) or '<li class="empty">Sem erros recentes</li>'
-    dm_errs_html = "".join(f'<li class="mono">{e}</li>' for e in dm_errs) or '<li class="empty">Sem erros recentes</li>'
+    auto_errs_html = "".join(f'<li class="mono">{html.escape(e)}</li>' for e in auto_errs) or '<li class="empty">Sem erros recentes</li>'
+    dm_errs_html = "".join(f'<li class="mono">{html.escape(e)}</li>' for e in dm_errs) or '<li class="empty">Sem erros recentes</li>'
 
     token_color = "green" if days_left is None or days_left >= 30 else ("amber" if days_left >= 5 else "red")
     token_value = f"{days_left}d" if days_left is not None else "?"
