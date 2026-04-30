@@ -50,7 +50,8 @@ IG_ENV_PATH = BASE_DIR / "config" / "instagram.env"
 IG_STATE_PATH = INSTAGRAM_DIR / "ig_state.json"
 IG_TRIGGERS_PATH = INSTAGRAM_DIR / "ig_triggers.json"
 IG_DM_SESSIONS_PATH = INSTAGRAM_DIR / "ig_dm_sessions.sqlite"
-IG_KB_PATH = INSTAGRAM_DIR / "ig_knowledge_base.py"
+IG_KB_PATH = INSTAGRAM_DIR / "ig_kb.json"
+IG_KB_LEGACY_PATH = INSTAGRAM_DIR / "ig_knowledge_base.py"
 
 
 def now_iso():
@@ -109,6 +110,10 @@ def save_checkpoint(checkpoint, path=None):
 
 
 def mark_checkpoint(step, status, detail=""):
+    """
+    status: "done" | "partial" | "error"
+    partial = etapa iniciada mas nao concluida (ex: dry-run falhou)
+    """
     checkpoint = load_checkpoint()
     checkpoint.setdefault("steps", {})
     checkpoint["steps"][step] = {

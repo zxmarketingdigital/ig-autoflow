@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
 Etapa 6 — DM Agent
-Configurar OmniRoute, Evolution API e instalar agentes de DM + token refresh.
+Configurar Anthropic API, Evolution (opcional) e instalar agentes de DM + token refresh.
+OmniRoute removido — aluno ZX Control ja tem ANTHROPIC_API_KEY (usa Claude Code).
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -27,6 +30,9 @@ from lib import (
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 TEMPLATES_DIR = ROOT_DIR / "templates"
 IG_DM_AGENT_SRC = ROOT_DIR / "scripts" / "ig_dm_agent.py"
+IG_TOKEN_REFRESH_SRC = ROOT_DIR / "scripts" / "ig_token_refresh.py"
+LIB_SRC = ROOT_DIR / "scripts" / "lib.py"
+IG_SCHEMAS_SRC = ROOT_DIR / "scripts" / "ig_schemas.py"
 
 
 def ask(prompt, secret=False, default=None):
@@ -47,45 +53,43 @@ def ask(prompt, secret=False, default=None):
         sys.exit(0)
 
 
-def check_omniroute(url):
-    try:
-        req = urllib.request.Request(f"{url.rstrip('/')}/health", method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
+# ---------------------------------------------------------------------------
+# Verificacao Anthropic
+# ---------------------------------------------------------------------------
 
-
-def try_install_omniroute():
+def check_anthropic_key(api_key=None):
+    """Faz uma chamada de teste real para garantir que a chave funciona."""
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return False, "ANTHROPIC_API_KEY nao encontrada no ambiente"
     try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "omniroute_check", ROOT_DIR / "scripts" / "omniroute_check.py"
+        import anthropic
+        client = anthropic.Anthropic(api_key=key)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=10,
+            messages=[{"role": "user", "content": "ping"}],
         )
-        if spec:
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            mod.check_or_install()
-            return True
+        return True, f"OK — modelo: claude-haiku-4-5-20251001"
     except Exception as e:
-        print(f"  [AVISO] omniroute_check nao disponivel: {e}")
-    return False
+        return False, f"Erro na chamada de teste: {e}"
 
 
-def save_dm_config(omniroute_url, model_main, model_fallback, evo_url, evo_instance, whatsapp_num, cadencia):
+# ---------------------------------------------------------------------------
+# Salvar config
+# ---------------------------------------------------------------------------
+
+def save_dm_config(evo_url, evo_instance, whatsapp_num, cadencia):
     config_path = INSTAGRAM_DIR / "dm_agent_config.json"
     INSTAGRAM_DIR.mkdir(parents=True, exist_ok=True)
     data = {
-        "omniroute_url": omniroute_url,
-        "model_main": model_main,
-        "model_fallback": model_fallback,
         "evolution_url": evo_url,
         "evolution_instance": evo_instance,
         "whatsapp_escalation_number": whatsapp_num,
         "cadencia_minutos": cadencia,
     }
     config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"  [OK] dm_agent_config.json salvo.")
+    print("  [OK] dm_agent_config.json salvo.")
 
 
 def append_to_env(key, value):
@@ -100,17 +104,55 @@ def append_to_env(key, value):
     IG_ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def copy_dm_agent():
-    dest = INSTAGRAM_DIR / "ig_dm_agent.py"
-    if IG_DM_AGENT_SRC.exists():
-        shutil.copy2(str(IG_DM_AGENT_SRC), str(dest))
-        print(f"  [OK] ig_dm_agent.py copiado para {INSTAGRAM_DIR}")
-    else:
-        dest.touch()
-        print(f"  [AVISO] ig_dm_agent.py nao encontrado em scripts/. Arquivo vazio criado.")
+# ---------------------------------------------------------------------------
+# Copiar scripts para runtime dir
+# ---------------------------------------------------------------------------
+
+def copy_scripts():
+    dest_dir = INSTAGRAM_DIR
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for src in [IG_DM_AGENT_SRC, IG_TOKEN_REFRESH_SRC, LIB_SRC, IG_SCHEMAS_SRC]:
+        if src.exists():
+            shutil.copy2(str(src), str(dest_dir / src.name))
+            print(f"  [OK] {src.name} copiado para {dest_dir}")
+        else:
+            print(f"  [AVISO] {src.name} nao encontrado em scripts/.")
 
 
-def _write_plist(plist_name, python_path, script_path, interval, log_path):
+# ---------------------------------------------------------------------------
+# LaunchAgents
+# ---------------------------------------------------------------------------
+
+def _kickstart_and_verify(label, log_path, timeout=8):
+    size_before = Path(log_path).stat().st_size if Path(log_path).exists() else 0
+    try:
+        uid = os.getuid()
+        subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        return False, "kickstart falhou"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(1)
+        if Path(log_path).exists() and Path(log_path).stat().st_size > size_before:
+            return True, "log atualizado"
+    return False, "nenhuma entrada nova no log"
+
+
+def _write_plist(plist_name, python_path, script_path, interval, log_path, env_vars=None):
+    env_block = ""
+    if env_vars:
+        pairs = "\n".join(
+            f"        <key>{k}</key>\n        <string>{v}</string>"
+            for k, v in env_vars.items()
+        )
+        env_block = f"""    <key>EnvironmentVariables</key>
+    <dict>
+{pairs}
+    </dict>
+"""
     content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -128,8 +170,8 @@ def _write_plist(plist_name, python_path, script_path, interval, log_path):
     <string>{log_path}</string>
     <key>StandardErrorPath</key>
     <string>{log_path}</string>
-    <key>RunAtLoad</key>
-    <false/>
+{env_block}    <key>RunAtLoad</key>
+    <true/>
 </dict>
 </plist>"""
     dest = LAUNCH_AGENTS_DIR / plist_name
@@ -162,7 +204,7 @@ def _write_token_plist(python_path, script_path, log_path):
     <key>StandardErrorPath</key>
     <string>{log_path}</string>
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 </dict>
 </plist>"""
     dest = LAUNCH_AGENTS_DIR / "com.zxlab.ig-token.plist"
@@ -171,21 +213,28 @@ def _write_token_plist(python_path, script_path, log_path):
     return dest
 
 
-def install_launchagents(cadencia):
+def install_launchagents(cadencia, anthropic_key):
     python_path = shutil.which("python3") or "python3"
     logs_dir = INSTAGRAM_DIR / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     dm_agent_path = INSTAGRAM_DIR / "ig_dm_agent.py"
     dm_log = logs_dir / "ig-dm.log"
-
     token_refresher_path = INSTAGRAM_DIR / "ig_token_refresh.py"
     token_log = logs_dir / "ig-token.log"
-
     interval_dm = cadencia * 60
 
+    results = {}
+
     if PLATFORM == "Darwin":
-        plist_dm = _write_plist("com.zxlab.ig-dm.plist", python_path, str(dm_agent_path), interval_dm, str(dm_log))
+        # DM Agent
+        env_vars = {}
+        if anthropic_key:
+            env_vars["ANTHROPIC_API_KEY"] = anthropic_key
+        plist_dm = _write_plist(
+            "com.zxlab.ig-dm.plist", python_path, str(dm_agent_path),
+            interval_dm, str(dm_log), env_vars=env_vars or None,
+        )
         try:
             subprocess.run(["launchctl", "unload", str(plist_dm)], capture_output=True)
             subprocess.run(["launchctl", "load", str(plist_dm)], check=True, capture_output=True)
@@ -193,21 +242,48 @@ def install_launchagents(cadencia):
         except subprocess.CalledProcessError as e:
             print(f"  [AVISO] launchctl load ig-dm falhou: {e}")
 
-        plist_token = _write_token_plist(python_path, str(token_refresher_path), str(token_log))
-        try:
-            subprocess.run(["launchctl", "unload", str(plist_token)], capture_output=True)
-            subprocess.run(["launchctl", "load", str(plist_token)], check=True, capture_output=True)
-            print(f"  [OK] LaunchAgent Token instalado: {plist_token}")
-        except subprocess.CalledProcessError as e:
-            print(f"  [AVISO] launchctl load ig-token falhou: {e}")
+        print("  Verificando 1a execucao do DM agent...")
+        ok_dm, detail_dm = _kickstart_and_verify("com.zxlab.ig-dm", dm_log)
+        if ok_dm:
+            print("  [OK] 1a execucao do DM agent: OK")
+        else:
+            print(f"  [AVISO] DM agent instalado mas nao logou ({detail_dm}).")
+        results["dm"] = ok_dm
+
+        # Token Refresh — apenas se ig_token_refresh.py existir
+        if token_refresher_path.exists():
+            plist_token = _write_token_plist(python_path, str(token_refresher_path), str(token_log))
+            try:
+                subprocess.run(["launchctl", "unload", str(plist_token)], capture_output=True)
+                subprocess.run(["launchctl", "load", str(plist_token)], check=True, capture_output=True)
+                print(f"  [OK] LaunchAgent Token instalado: {plist_token}")
+            except subprocess.CalledProcessError as e:
+                print(f"  [AVISO] launchctl load ig-token falhou: {e}")
+
+            print("  Verificando 1a execucao do Token Refresh (esperado: exit 0 silencioso)...")
+            ok_token, detail_token = _kickstart_and_verify("com.zxlab.ig-token", token_log, timeout=10)
+            if ok_token:
+                print("  [OK] Token Refresh executado.")
+            else:
+                print(f"  [AVISO] Token Refresh nao logou ({detail_token}) — normal se token < 24h.")
+            results["token"] = ok_token
+        else:
+            print("  [AVISO] ig_token_refresh.py nao encontrado, LaunchAgent de token nao instalado.")
 
     elif PLATFORM == "Linux":
         print(f"  [INFO] Linux: adicione ao cron manualmente:")
         print(f"    */{cadencia} * * * * {python_path} {dm_agent_path}")
         print(f"    0 2 * * * {python_path} {token_refresher_path}")
+        results["dm"] = True
     else:
         print(f"  [AVISO] Plataforma {PLATFORM}: instale agendadores manualmente.")
 
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     print()
@@ -217,73 +293,94 @@ def main():
     print()
     print("  [██████░░░░] Etapa 6 de 10")
     print()
-    print("  Etapa 6 — DM Agent (OmniRoute + Evolution + LaunchAgents)")
+    print("  Etapa 6 — DM Agent (Anthropic SDK + LaunchAgents)")
     print()
 
-    # 6a: Verifica OmniRoute
-    print("  6a — Verificando OmniRoute...")
-    omniroute_found = try_install_omniroute()
-    if not omniroute_found:
-        print("  (OmniRoute sera verificado pela URL na proxima etapa)")
+    # 6a: Verificar ANTHROPIC_API_KEY
+    print("  6a — Verificando ANTHROPIC_API_KEY...")
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "") or load_env_var(IG_ENV_PATH, "ANTHROPIC_API_KEY") or ""
+
+    if not anthropic_key:
+        print("  Chave nao encontrada no ambiente. Cole sua ANTHROPIC_API_KEY:")
+        anthropic_key = ask("ANTHROPIC_API_KEY", secret=True)
+        if not anthropic_key:
+            print("  [ERRO] ANTHROPIC_API_KEY e obrigatoria para o DM Agent.")
+            sys.exit(1)
+
+    print("  Testando ANTHROPIC_API_KEY...")
+    ok, detail = check_anthropic_key(anthropic_key)
+    if not ok:
+        print(f"  [ERRO] Anthropic nao respondeu: {detail}")
+        print("  Corrija a chave e execute esta etapa novamente.")
+        mark_checkpoint("step_6_dm_agent", "partial", f"anthropic_key_invalid: {detail}")
+        sys.exit(1)
+    print(f"  [OK] Anthropic: {detail}")
+    append_to_env("ANTHROPIC_API_KEY", anthropic_key)
     print()
 
-    # 6b: Credenciais OmniRoute
-    print("  6b — Configurar OmniRoute:")
-    omniroute_url = ask("URL do OmniRoute", default="http://localhost:8765")
-    model_main = ask("Modelo principal", default="gpt-4o-mini")
-    model_fallback = ask("Modelo fallback", default="gemini-2.0-flash")
-
-    print()
-    print("  Testando conexao com OmniRoute...")
-    if check_omniroute(omniroute_url):
-        print(f"  [OK] OmniRoute respondendo em {omniroute_url}")
+    # 6b: Evolution (opcional)
+    print("  6b — Evolution API para escalacao WhatsApp (opcional):")
+    tem_evolution = ask("Voce tem Evolution API configurada? (s/N)", default="N").lower()
+    evo_url, evo_instance, whatsapp_num = "", "", ""
+    if tem_evolution in ("s", "sim", "y", "yes"):
+        evo_url = ask("URL da Evolution API", default=load_env_var(IG_ENV_PATH, "EVOLUTION_BASE") or "")
+        evo_instance = ask("Nome da instancia WhatsApp", default=load_env_var(IG_ENV_PATH, "EVOLUTION_INSTANCE") or "")
+        whatsapp_num = ask("Seu numero WhatsApp com DDI (ex: 5585999999999)", default=load_env_var(IG_ENV_PATH, "USER_WHATSAPP_NUMBER") or "")
+        if evo_url:
+            append_to_env("EVOLUTION_BASE", evo_url)
+        if evo_instance:
+            append_to_env("EVOLUTION_INSTANCE", evo_instance)
+        if whatsapp_num:
+            append_to_env("USER_WHATSAPP_NUMBER", whatsapp_num)
+        print("  [OK] Evolution configurada.")
     else:
-        print(f"  [AVISO] OmniRoute nao respondeu em {omniroute_url}")
-        print("  Certifique-se de que o OmniRoute esta rodando antes de usar o agente.")
+        print("  [INFO] Sem Evolution — escalacao via DM direta (link WhatsApp no dm_text do trigger).")
     print()
 
-    # 6c: Evolution para escalacao
-    print("  6c — Configurar Evolution API (escalacao WhatsApp):")
-    evo_url = ask("URL da Evolution API")
-    evo_instance = ask("Nome da instancia WhatsApp")
-    whatsapp_num = ask("Seu numero WhatsApp com DDI (ex: 5585999999999)")
-    print()
-
-    # 6d: Cadencia DM
-    print("  6d — Cadencia do DM Agent:")
-    cadencia_str = ask("Cadencia em minutos (1-10)", default="2")
+    # 6c: Cadencia DM
+    print("  6c — Cadencia do DM Agent:")
+    cadencia_str = ask("Cadencia em minutos (2-30)", default="5")
     try:
         cadencia = int(cadencia_str)
-        cadencia = max(1, min(10, cadencia))
+        cadencia = max(2, min(30, cadencia))
     except ValueError:
-        cadencia = 2
+        cadencia = 5
     print(f"  [OK] Cadencia: {cadencia} minutos.")
     print()
 
-    # 6e: Instalar ig_dm_agent.py
-    print("  6e — Instalando ig_dm_agent.py...")
-    copy_dm_agent()
+    # 6d: Copiar scripts
+    print("  6d — Instalando scripts de runtime...")
+    copy_scripts()
     print()
 
     # Salvar config
-    save_dm_config(omniroute_url, model_main, model_fallback, evo_url, evo_instance, whatsapp_num, cadencia)
-
-    # Salvar credenciais no .env
-    append_to_env("OMNIROUTE_URL", omniroute_url)
-    append_to_env("DM_MODEL", model_main)
-    append_to_env("EVOLUTION_BASE", evo_url)
-    append_to_env("EVOLUTION_INSTANCE", evo_instance)
-    append_to_env("USER_WHATSAPP_NUMBER", whatsapp_num)
-    print("  [OK] Credenciais salvas em instagram.env.")
+    save_dm_config(evo_url, evo_instance, whatsapp_num, cadencia)
     print()
 
-    # 6f: Instalar LaunchAgents
-    print("  6f — Instalando LaunchAgents...")
-    install_launchagents(cadencia)
+    # 6e: Instalar LaunchAgents
+    print("  6e — Instalando LaunchAgents...")
+    agent_results = install_launchagents(cadencia, anthropic_key)
     print()
 
-    mark_checkpoint("step_6_dm_agent", "done", f"model={model_main} cadencia={cadencia}min")
+    dm_ok = agent_results.get("dm", False)
 
+    if dm_ok:
+        status = "done"
+        detail = f"anthropic=ok cadencia={cadencia}min"
+    else:
+        status = "partial"
+        detail = f"anthropic=ok cadencia={cadencia}min dm_agent_nao_confirmado"
+
+    mark_checkpoint("step_6_dm_agent", status, detail)
+
+    uid = os.getuid() if PLATFORM == "Darwin" else "$(id -u)"
+    print()
+    print("  ╔══════════════════════════════════════════════════════╗")
+    print("  ║  Comandos uteis apos esta etapa:                     ║")
+    print("  ╚══════════════════════════════════════════════════════╝")
+    print(f"  Forcar DM agent agora:  launchctl kickstart -k gui/{uid}/com.zxlab.ig-dm")
+    print(f"  Ver log DM:             tail -f {INSTAGRAM_DIR}/logs/ig-dm.log")
+    print()
     print("  [OK] Etapa 6 concluida!")
     print()
     print("  Proximo: python3 setup/setup_mission_update_s5.py")

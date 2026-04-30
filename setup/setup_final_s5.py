@@ -215,8 +215,8 @@ def main():
     print("  ║                                                      ║")
     print("  ║   O que voce tem agora:                              ║")
     print("  ║   - Comment Responder detectando keywords 24/7       ║")
-    print("  ║   - DM Agent respondendo com base de conhecimento    ║")
-    print("  ║   - Escalacao automatica para WhatsApp               ║")
+    print("  ║   - DM Agent respondendo com Anthropic Claude        ║")
+    print("  ║   - Escalacao automatica para WhatsApp (opcional)    ║")
     print("  ║   - Mission Control 5.0 com widgets Instagram        ║")
     print("  ║   - Token refresh automatico                         ║")
     print("  ║                                                      ║")
@@ -224,6 +224,30 @@ def main():
     print("  ║   Primeira semana de maio/2026                       ║")
     print("  ║                                                      ║")
     print("  ╚══════════════════════════════════════════════════════╝")
+    print()
+
+    # U#5 — Resumo das automacoes instaladas com comandos prontos
+    import os
+    from lib import INSTAGRAM_DIR as _IG_DIR
+    uid = os.getuid() if hasattr(os, "getuid") else "$(id -u)"
+    print("  ╔══════════════════════════════════════════════════════╗")
+    print("  ║  Automacoes instaladas                               ║")
+    print("  ╚══════════════════════════════════════════════════════╝")
+    print()
+    print("  com.zxlab.ig-auto  (Comment Responder — a cada 30min)")
+    print(f"  Testar agora:  launchctl kickstart -k gui/{uid}/com.zxlab.ig-auto")
+    print(f"  Ver log:       tail -f {_IG_DIR}/logs/ig-auto.log")
+    print()
+    print("  com.zxlab.ig-dm    (DM Agent Anthropic — a cada 5min)")
+    print(f"  Testar agora:  launchctl kickstart -k gui/{uid}/com.zxlab.ig-dm")
+    print(f"  Ver log:       tail -f {_IG_DIR}/logs/ig-dm.log")
+    print()
+    print("  com.zxlab.ig-token (Token Refresh — 03h diario)")
+    print(f"  Testar agora:  launchctl kickstart -k gui/{uid}/com.zxlab.ig-token")
+    print(f"  Ver log:       tail -f {_IG_DIR}/logs/ig-token.log")
+    print()
+    print(f"  Status geral:  python3 {_IG_DIR}/ig_auto_responder.py --status")
+    print(f"  Auditoria:     python3 setup/setup_audit_s5.py --with-runtime")
     print()
 
     # Pitch para visitantes do repositorio publico

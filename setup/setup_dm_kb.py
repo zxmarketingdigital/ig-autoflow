@@ -4,6 +4,7 @@ Etapa 5 — DM Knowledge Base
 Cadastrar produtos/servicos que o agente de DM vai usar para responder.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from lib import (
     INSTAGRAM_DIR,
     mark_checkpoint,
 )
+from ig_schemas import validate_products, make_product
 
 
 def ask(prompt, secret=False, default=None):
@@ -53,6 +55,20 @@ def ask_multiline(prompt):
     return "\n".join(lines).strip()
 
 
+def ask_url(prompt):
+    while True:
+        value = ask(prompt)
+        if not value:
+            print("  URL e obrigatoria. Digite novamente.")
+            continue
+        if not (value.startswith("http://") or value.startswith("https://")):
+            confirm = ask(f"  '{value}' nao parece uma URL. Usar mesmo assim? (s/N)", default="N").lower()
+            if confirm in ("s", "sim", "y", "yes"):
+                return value
+        else:
+            return value
+
+
 def collect_products():
     produtos = []
 
@@ -70,18 +86,22 @@ def collect_products():
         print()
         print(f"  --- Produto #{i} ---")
         nome = ask(f"Nome do produto #{i}")
-        url = ask(f"URL/link do produto #{i}")
+        while not nome:
+            print("  Nome e obrigatorio.")
+            nome = ask(f"Nome do produto #{i}")
+
+        url = ask_url(f"URL/link do produto #{i}")
         descricao = ask_multiline(f"Descricao/diferencial do produto #{i}")
         preco = ask(f"Preco do produto #{i} (ex: R$ 497,00)")
         bonus = ask(f"Bonus do produto #{i} (opcional, Enter para pular)", default="")
 
-        produtos.append({
-            "name": nome,
-            "url": url,
-            "description": descricao,
-            "price": preco,
-            "bonus": bonus,
-        })
+        produtos.append(make_product(
+            nome=nome,
+            url=url,
+            descricao=descricao,
+            preco=preco,
+            bonus=bonus,
+        ))
         print(f"  [OK] Produto '{nome}' cadastrado.")
 
     return produtos
@@ -93,40 +113,27 @@ def preview_products(produtos):
     print()
     for i, p in enumerate(produtos, 1):
         print(f"  [{i}] {p['nome']}")
-        print(f"      Preco: {p['preco']}")
+        if p.get("preco"):
+            print(f"      Preco: {p['preco']}")
         print(f"      Link: {p['url']}")
         if p.get("bonus"):
             print(f"      Bonus: {p['bonus']}")
-        desc_preview = p["descricao"][:80].replace("\n", " ")
-        if desc_preview:
-            print(f"      Descricao: {desc_preview}{'...' if len(p['descricao']) > 80 else ''}")
+        desc = p.get("descricao", "")
+        if desc:
+            desc_preview = desc[:80].replace("\n", " ")
+            print(f"      Descricao: {desc_preview}{'...' if len(desc) > 80 else ''}")
         print()
 
 
 def save_kb(produtos):
     INSTAGRAM_DIR.mkdir(parents=True, exist_ok=True)
-
-    lines = [
-        "# ig_knowledge_base.py",
-        "# Gerado automaticamente pelo setup da Semana 5.",
-        "# Edite para atualizar seus produtos/servicos.",
-        "",
-        "PRODUCTS = [",
-    ]
-    for p in produtos:
-        desc_escaped = p["description"].replace('"""', "'''")
-        lines.append("    {")
-        lines.append(f'        "name": {repr(p["name"])},')
-        lines.append(f'        "url": {repr(p["url"])},')
-        lines.append(f'        "description": """{desc_escaped}""",')
-        lines.append(f'        "price": {repr(p["price"])},')
-        lines.append(f'        "bonus": {repr(p["bonus"])},')
-        lines.append("    },")
-    lines.append("]")
-    lines.append("")
-
-    IG_KB_PATH.write_text("\n".join(lines), encoding="utf-8")
-    print(f"  [OK] ig_knowledge_base.py salvo em {INSTAGRAM_DIR}")
+    # valida antes de salvar
+    validate_products(produtos)
+    IG_KB_PATH.write_text(
+        json.dumps(produtos, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"  [OK] ig_kb.json salvo em {INSTAGRAM_DIR} ({len(produtos)} produto(s))")
 
 
 def main():

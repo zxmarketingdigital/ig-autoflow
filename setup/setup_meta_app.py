@@ -49,8 +49,7 @@ def _ig_get(endpoint, token):
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8") if e.fp else ""
         try:
-            err_data = json.loads(body)
-            return None, err_data
+            return None, json.loads(body)
         except Exception:
             return None, {"error": {"message": f"HTTP {e.code}: {body}"}}
     except urllib.error.URLError as e:
@@ -68,8 +67,7 @@ def _ig_post(endpoint, token, payload):
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8") if e.fp else ""
         try:
-            err_data = json.loads(body)
-            return None, err_data
+            return None, json.loads(body)
         except Exception:
             return None, {"error": {"message": f"HTTP {e.code}: {body}"}}
     except urllib.error.URLError as e:
@@ -85,8 +83,7 @@ def _ig_delete(endpoint, token):
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8") if e.fp else ""
         try:
-            err_data = json.loads(body)
-            return None, err_data
+            return None, json.loads(body)
         except Exception:
             return None, {"error": {"message": f"HTTP {e.code}: {body}"}}
     except urllib.error.URLError as e:
@@ -106,6 +103,14 @@ def save_env(app_id, app_secret, user_id, token):
     IG_ENV_PATH.write_text(content, encoding="utf-8")
 
 
+def fetch_user_id_from_token(token):
+    """Busca IG_USER_ID automaticamente via GET /me para evitar erro manual."""
+    data, err = _ig_get("/me", token)
+    if data and "id" in data:
+        return data["id"], data.get("username", "")
+    return None, None
+
+
 def run_smoke_tests(user_id, token):
     all_ok = True
 
@@ -118,8 +123,8 @@ def run_smoke_tests(user_id, token):
         all_ok = False
     else:
         acct = data.get("account_type", "")
+        username = data.get("username", "")
         if acct == "BUSINESS":
-            username = data.get("username", "")
             print(f"  [OK] Conta Business confirmada: @{username}")
         else:
             print(f"  [AVISO] account_type={acct!r} (esperado: BUSINESS)")
@@ -143,7 +148,7 @@ def run_smoke_tests(user_id, token):
             all_ok = False
             return all_ok, None, None
 
-    # Teste 3: escopo comments — postar e deletar comentario de teste
+    # Teste 3: escopo comments
     print("  Teste 3: Verificando permissao de comentarios...")
     post_data, post_err = _ig_post(f"/{media_id}/comments", token, {"message": "teste-zxlab-apagar"})
     if post_err:
@@ -161,7 +166,7 @@ def run_smoke_tests(user_id, token):
             else:
                 print("  [OK] Comentario de teste deletado.")
 
-    # Teste 4: escopo messages — erro 100 esperado (user not found), NAO erro de permissao
+    # Teste 4: escopo messages
     print("  Teste 4: Verificando permissao de mensagens...")
     dm_data, dm_err = _ig_post(f"/{user_id}/messages", token, {
         "recipient": {"id": "FAKE_TEST_999"},
@@ -171,7 +176,7 @@ def run_smoke_tests(user_id, token):
         code = dm_err.get("error", {}).get("code", 0)
         msg = dm_err.get("error", {}).get("message", "")
         if code == 100:
-            print(f"  [OK] Erro 100 (user not found) — permissao de mensagens OK.")
+            print("  [OK] Erro 100 (user not found) — permissao de mensagens OK.")
         elif code in (10, 200, 190):
             print(f"  [FALHA] Erro de permissao (code={code}): {msg}")
             print("  Verifique se o escopo instagram_business_manage_messages foi adicionado.")
@@ -190,6 +195,31 @@ def run_smoke_tests(user_id, token):
         pass
 
     return all_ok, media_id, username
+
+
+def collect_credentials():
+    """Coleta credenciais e auto-preenche IG_USER_ID a partir do token."""
+    print("  Agora cole as credenciais abaixo:")
+    print()
+    app_id = ask("IG_APP_ID_INSTAGRAM (App ID do Meta)")
+    app_secret = ask("IG_APP_SECRET", secret=True)
+    token = ask("IG_ACCESS_TOKEN", secret=True)
+
+    if not all([app_id, app_secret, token]):
+        return None, None, None, None, None
+
+    # Auto-preencher IG_USER_ID
+    print()
+    print("  Buscando IG_USER_ID automaticamente via token...")
+    auto_user_id, auto_username = fetch_user_id_from_token(token)
+    if auto_user_id:
+        print(f"  [OK] IG_USER_ID detectado: {auto_user_id} (@{auto_username})")
+        user_id = auto_user_id
+    else:
+        print("  Nao foi possivel detectar automaticamente. Cole manualmente:")
+        user_id = ask("IG_USER_ID (Instagram User ID)")
+
+    return app_id, app_secret, user_id, token, auto_username
 
 
 def main():
@@ -211,7 +241,7 @@ def main():
     print()
     print("  3. Em 'Roles > Instagram Testers':")
     print("     → Adicione sua conta Instagram")
-    print("     → Aceite o convite acessando Instagram > Configuracoes > Apps e Sites")
+    print("     → Aceite o convite: Instagram > Configuracoes > Apps e Sites")
     print()
     print("  4. Adicione as 3 permissoes:")
     print("     → instagram_business_basic")
@@ -221,18 +251,17 @@ def main():
     print("  5. Clique em 'Gerar token' → OAuth popup → Autorize os 3 escopos")
     print()
 
-    while True:
-        print("  Agora cole as credenciais abaixo:")
-        print()
-        app_id = ask("IG_APP_ID_INSTAGRAM (App ID do Meta)")
-        app_secret = ask("IG_APP_SECRET", secret=True)
-        user_id = ask("IG_USER_ID (Instagram User ID)")
-        token = ask("IG_ACCESS_TOKEN", secret=True)
+    max_attempts = 3
+    attempt = 0
+
+    while attempt < max_attempts:
+        app_id, app_secret, user_id, token, username = collect_credentials()
 
         if not all([app_id, app_secret, user_id, token]):
             print()
             print("  [ERRO] Todas as credenciais sao obrigatorias.")
             print()
+            attempt += 1
             continue
 
         print()
@@ -243,19 +272,32 @@ def main():
 
         print("  Executando smoke tests...")
         print()
-        ok, media_id, username = run_smoke_tests(user_id, token)
+        ok, media_id, smoke_username = run_smoke_tests(user_id, token)
         print()
 
         if ok:
             print("  [OK] Todos os smoke tests passaram!")
             break
         else:
+            attempt += 1
             print("  Um ou mais testes falharam.")
-            print("  Verifique as instrucoes acima e tente novamente.")
-            ask("Pressione Enter para tentar novamente")
+            if attempt >= max_attempts:
+                print(f"  [{attempt}/{max_attempts}] Limite de tentativas atingido.")
+                print("  Verifique as instrucoes acima e execute esta etapa novamente.")
+                mark_checkpoint("step_2_meta_app", "partial", "smoke_tests_failed")
+                sys.exit(1)
+
+            recoletar = ask(
+                f"  Recolher credenciais e tentar novamente? ({attempt}/{max_attempts}) (s/N)",
+                default="s",
+            ).lower()
+            if recoletar not in ("s", "sim", "y", "yes"):
+                print("  Abortando. Execute novamente quando corrigir as credenciais.")
+                mark_checkpoint("step_2_meta_app", "partial", "aborted_by_user")
+                sys.exit(0)
             print()
 
-    detail = f"user={username}" if username else f"user_id={user_id}"
+    detail = f"user=@{username or smoke_username}" if (username or smoke_username) else f"user_id={user_id}"
     mark_checkpoint("step_2_meta_app", "done", detail)
 
     print("  [OK] Etapa 2 concluida!")

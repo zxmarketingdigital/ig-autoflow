@@ -8,6 +8,9 @@ import json
 import shutil
 import subprocess
 import sys
+import time
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -23,28 +26,54 @@ from lib import (
     load_env_var,
     mark_checkpoint,
 )
+from ig_schemas import validate_triggers, make_trigger
 
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 TEMPLATES_DIR = ROOT_DIR / "templates"
 IG_RESPONDER_SRC = ROOT_DIR / "scripts" / "ig_auto_responder.py"
+LIB_SRC = ROOT_DIR / "scripts" / "lib.py"
+IG_SCHEMAS_SRC = ROOT_DIR / "scripts" / "ig_schemas.py"
 
 
-def ask(prompt, secret=False, default=None):
+def ask(prompt, secret=False, default=None, validator=None):
     import getpass
     display = f"  {prompt}"
     if default:
         display += f" [{default}]"
     display += ": "
-    try:
-        if secret:
-            value = getpass.getpass(display).strip()
-        else:
-            value = input(display).strip()
-        return value if value else (default or "")
-    except (KeyboardInterrupt, EOFError):
-        print()
-        print("  Setup cancelado.")
-        sys.exit(0)
+    while True:
+        try:
+            if secret:
+                value = getpass.getpass(display).strip()
+            else:
+                value = input(display).strip()
+            value = value if value else (default or "")
+            if validator and value:
+                ok, msg = validator(value)
+                if not ok:
+                    print(f"  {msg}")
+                    continue
+            return value
+        except (KeyboardInterrupt, EOFError):
+            print()
+            print("  Setup cancelado.")
+            sys.exit(0)
+
+
+def is_url(value):
+    if not value:
+        return True, ""
+    if not (value.startswith("http://") or value.startswith("https://")):
+        return False, f"'{value}' nao parece uma URL valida (deve comecar com http:// ou https://)"
+    return True, ""
+
+
+def min_length(n):
+    def _v(value):
+        if len(value) < n:
+            return False, f"Minimo {n} caracteres."
+        return True, ""
+    return _v
 
 
 def collect_keywords():
@@ -56,23 +85,23 @@ def collect_keywords():
     idx = 1
     while True:
         print(f"  --- Palavra-chave #{idx} ---")
-        keyword = ask(f"Palavra-chave #{idx} (Enter para finalizar)")
+        keyword = ask(f"Palavra-chave #{idx} (Enter para finalizar)", validator=None)
         if not keyword:
             if not triggers:
                 print("  Ao menos 1 palavra-chave e obrigatoria.")
                 continue
             break
 
-        link = ask(f"URL/link de destino para '{keyword}'")
-        reply_text = ask(f"Mensagem do reply publico no comentario")
-        dm_text = ask(f"Mensagem da DM (Private Reply)")
+        link = ask(f"URL/link de destino para '{keyword}' (opcional)", validator=is_url)
+        reply_text = ask(f"Mensagem do reply publico no comentario", validator=min_length(5))
+        dm_text = ask(f"Mensagem da DM (Private Reply)", validator=min_length(5))
 
-        triggers.append({
-            "keywords": [keyword.lower().strip()],
-            "url": link,
-            "reply_text": reply_text,
-            "dm_text": dm_text,
-        })
+        triggers.append(make_trigger(
+            keywords=[keyword],
+            reply_text=reply_text,
+            dm_text=dm_text,
+            url=link,
+        ))
         print(f"  [OK] Palavra-chave '{keyword}' cadastrada.")
         print()
 
@@ -87,6 +116,7 @@ def collect_keywords():
 
 def save_triggers(triggers):
     INSTAGRAM_DIR.mkdir(parents=True, exist_ok=True)
+    validate_triggers(triggers)
     IG_TRIGGERS_PATH.write_text(json.dumps(triggers, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  [OK] ig_triggers.json salvo: {len(triggers)} keyword(s).")
 
@@ -95,23 +125,46 @@ def save_state():
     IG_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not IG_STATE_PATH.exists():
         IG_STATE_PATH.write_text(json.dumps({"processed_comment_ids": []}, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"  [OK] ig_state.json criado (vazio).")
+        print("  [OK] ig_state.json criado (vazio).")
     else:
-        print(f"  [OK] ig_state.json ja existe.")
+        print("  [OK] ig_state.json ja existe.")
 
 
-def copy_responder():
-    dest = INSTAGRAM_DIR / "ig_auto_responder.py"
-    if IG_RESPONDER_SRC.exists():
-        shutil.copy2(str(IG_RESPONDER_SRC), str(dest))
-        print(f"  [OK] ig_auto_responder.py copiado para {INSTAGRAM_DIR}")
-    else:
-        dest.touch()
-        print(f"  [AVISO] ig_auto_responder.py nao encontrado em scripts/. Arquivo vazio criado.")
-        print(f"  Adicione o script em: {IG_RESPONDER_SRC}")
+def copy_scripts():
+    dest_dir = INSTAGRAM_DIR
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    for src in [IG_RESPONDER_SRC, LIB_SRC, IG_SCHEMAS_SRC]:
+        dest = dest_dir / src.name
+        if src.exists():
+            shutil.copy2(str(src), str(dest))
+            print(f"  [OK] {src.name} copiado para {dest_dir}")
+        else:
+            print(f"  [AVISO] {src.name} nao encontrado em scripts/.")
 
 
-def install_launchagent(cadencia):
+def _kickstart_and_verify(label, log_path, timeout=8):
+    """Forca execucao via kickstart e verifica se apareceu entrada nova no log."""
+    size_before = Path(log_path).stat().st_size if Path(log_path).exists() else 0
+    try:
+        import os
+        uid = os.getuid()
+        subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        return False, "kickstart falhou"
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(1)
+        if Path(log_path).exists() and Path(log_path).stat().st_size > size_before:
+            return True, "log atualizado"
+    return False, "nenhuma entrada nova no log"
+
+
+def install_launchagent(cadencia, posts_max):
     plist_name = "com.zxlab.ig-auto.plist"
     plist_src = TEMPLATES_DIR / plist_name
 
@@ -120,12 +173,19 @@ def install_launchagent(cadencia):
     log_path = INSTAGRAM_DIR / "logs" / "ig-auto.log"
     interval = cadencia * 60
 
+    env_block = f"""    <key>EnvironmentVariables</key>
+    <dict>
+        <key>IG_POSTS_PROCESS_MAX</key>
+        <string>{posts_max}</string>
+    </dict>"""
+
     if plist_src.exists():
         content = plist_src.read_text(encoding="utf-8")
         content = content.replace("{{PYTHON}}", python_path)
         content = content.replace("{{RESPONDER_PATH}}", str(responder_path))
         content = content.replace("{{LOG_PATH}}", str(log_path))
         content = content.replace("{{INTERVAL}}", str(interval))
+        content = content.replace("<key>RunAtLoad</key>\n    <false/>", "<key>RunAtLoad</key>\n    <true/>")
     else:
         content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -144,8 +204,9 @@ def install_launchagent(cadencia):
     <string>{log_path}</string>
     <key>StandardErrorPath</key>
     <string>{log_path}</string>
+{env_block}
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 </dict>
 </plist>"""
 
@@ -159,10 +220,26 @@ def install_launchagent(cadencia):
             print(f"  [OK] LaunchAgent instalado: {dest_plist}")
         except subprocess.CalledProcessError as e:
             print(f"  [AVISO] launchctl load falhou: {e}")
+            return dest_plist, False
+
+        print()
+        print("  Verificando 1a execucao do agent...")
+        ok, detail = _kickstart_and_verify("com.zxlab.ig-auto", log_path)
+        if ok:
+            print("  [OK] 1a execucao do agent: OK")
+        else:
+            print(f"  [AVISO] Agent instalado mas nao logou ({detail}).")
+            print(f"  Para forcar manualmente:")
+            import os
+            print(f"    launchctl kickstart -k gui/{os.getuid()}/com.zxlab.ig-auto")
+        return dest_plist, ok
+
     elif PLATFORM == "Linux":
         _install_cron(python_path, responder_path, cadencia)
+        return None, True
     else:
         print(f"  [AVISO] Plataforma {PLATFORM}: instale manualmente o agendador.")
+        return None, False
 
 
 def _install_cron(python_path, responder_path, cadencia):
@@ -178,57 +255,44 @@ def _install_cron(python_path, responder_path, cadencia):
             else:
                 print(f"  [AVISO] Falha ao adicionar cron: {proc.stderr}")
         else:
-            print(f"  [OK] Cron entry ja existe.")
+            print("  [OK] Cron entry ja existe.")
     except Exception as e:
         print(f"  [AVISO] Nao foi possivel instalar cron: {e}")
 
 
-def get_first_media_id(token):
-    import urllib.error
-    url = f"https://graph.instagram.com/v22.0/me/media?access_token={token}"
-    req = urllib.request.Request(url)
+def dry_run_installed(python_path=None):
+    """Executa o script JA instalado em --dry-run para replicar o ambiente real do LaunchAgent."""
+    installed = INSTAGRAM_DIR / "ig_auto_responder.py"
+    if not installed.exists():
+        print("  [AVISO] ig_auto_responder.py nao encontrado em destino. Pulando dry-run.")
+        return False
+
+    py = python_path or shutil.which("python3") or "python3"
+    print(f"  Executando dry-run do script instalado: {installed}")
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            posts = data.get("data", [])
-            return posts[0]["id"] if posts else None
-    except Exception:
-        return None
-
-
-def dry_run(triggers, token):
-    import urllib.request as _req
-
-    media_id = get_first_media_id(token)
-    if not media_id:
-        print("  [AVISO] Nao foi possivel obter posts para dry-run.")
-        return
-
-    url = f"https://graph.instagram.com/v22.0/{media_id}/comments?access_token={token}"
-    req = urllib.request.Request(url)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            comments = data.get("data", [])[:5]
-    except Exception:
-        comments = []
-
-    print(f"  Dry-run em {len(comments)} comentario(s) recentes (sem enviar nada):")
-    print()
-    for c in comments:
-        text = c.get("text", "").lower()
-        matched_trigger = None
-        for t in triggers:
-            if any(kw.lower() in text for kw in t.get("keywords", [])):
-                matched_trigger = t
-                break
-        if matched_trigger:
-            kws = matched_trigger["keywords"]
-            print(f"    DISPARARIA para: \"{c.get('text', '')[:60]}\" → keywords: {kws}")
+        result = subprocess.run(
+            [py, str(installed), "--dry-run"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(Path.home()),
+        )
+        output = (result.stdout + result.stderr).strip()
+        if output:
+            for line in output.splitlines()[-10:]:
+                print(f"    {line}")
+        if result.returncode == 0:
+            print("  [OK] Dry-run concluido sem erros.")
+            return True
         else:
-            print(f"    Sem match: \"{c.get('text', '')[:60]}\"")
-    if not comments:
-        print("  (Nenhum comentario encontrado para dry-run)")
+            print(f"  [AVISO] Dry-run retornou codigo {result.returncode}.")
+            return False
+    except subprocess.TimeoutExpired:
+        print("  [AVISO] Dry-run excedeu 30s.")
+        return False
+    except Exception as e:
+        print(f"  [AVISO] Dry-run falhou: {e}")
+        return False
 
 
 def main():
@@ -262,20 +326,47 @@ def main():
     print(f"  [OK] Cadencia: {cadencia} minutos.")
     print()
 
+    while True:
+        posts_str = ask("Quantos posts mais recentes monitorar? (10-200)", default="50")
+        try:
+            posts_max = int(posts_str)
+            if 10 <= posts_max <= 200:
+                break
+            print("  Valor fora do range. Digite entre 10 e 200.")
+        except ValueError:
+            print("  Valor invalido.")
+    print(f"  [OK] Posts monitorados: {posts_max}.")
+    print()
+
     save_triggers(triggers)
     save_state()
-    copy_responder()
+    copy_scripts()
     print()
 
     print("  Instalando agendador...")
-    install_launchagent(cadencia)
+    _, agent_ok = install_launchagent(cadencia, posts_max)
     print()
 
     print("  Executando dry-run (simulacao sem envios reais)...")
-    dry_run(triggers, token)
+    dry_ok = dry_run_installed()
     print()
 
-    mark_checkpoint("step_4_comment_responder", "done", f"keywords={len(triggers)} cadencia={cadencia}min")
+    if agent_ok:
+        status = "done"
+    elif dry_ok:
+        status = "partial"
+        print("  [AVISO] Agent instalado mas 1a execucao nao confirmada.")
+    else:
+        status = "partial"
+        print("  [AVISO] Etapa 4 com problemas. Verifique os logs antes de continuar.")
+
+    import os
+    print()
+    print(f"  Para forcar execucao agora:")
+    print(f"    launchctl kickstart -k gui/{os.getuid()}/com.zxlab.ig-auto")
+    print()
+
+    mark_checkpoint("step_4_comment_responder", status, f"keywords={len(triggers)} cadencia={cadencia}min posts_max={posts_max}")
 
     print("  [OK] Etapa 4 concluida!")
     print()

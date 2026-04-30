@@ -5,6 +5,7 @@ Roda via LaunchAgent/cron a cada N minutos.
 """
 
 import json
+import os
 import sys
 import time
 import urllib.parse
@@ -18,6 +19,10 @@ from lib import (
     IG_ENV_PATH, IG_STATE_PATH, IG_TRIGGERS_PATH,
     INSTAGRAM_DIR, load_env_var, now_iso,
 )
+from ig_schemas import validate_triggers
+
+POSTS_SCAN_LIMIT = int(os.environ.get("IG_POSTS_SCAN_LIMIT", "100"))
+POSTS_PROCESS_MAX = int(os.environ.get("IG_POSTS_PROCESS_MAX", "50"))
 
 BASE_URL = "https://graph.instagram.com/v22.0"
 LOG_FILE = INSTAGRAM_DIR / "logs" / "ig-auto.log"
@@ -64,7 +69,33 @@ def save_state(state):
 def load_triggers():
     if not IG_TRIGGERS_PATH.exists():
         return []
-    return json.loads(IG_TRIGGERS_PATH.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(IG_TRIGGERS_PATH.read_text(encoding="utf-8"))
+        return validate_triggers(data)
+    except ValueError as e:
+        log(f"[ERRO] ig_triggers.json invalido: {e}")
+        return []
+
+
+def _api_raw(url):
+    with urllib.request.urlopen(url, timeout=15) as resp:
+        return json.loads(resp.read())
+
+
+def fetch_all_posts_with_comments(token, max_total=POSTS_SCAN_LIMIT):
+    collected = []
+    next_url = None
+    params = {"fields": "id,comments_count", "limit": "100"}
+    while len(collected) < max_total:
+        if next_url:
+            resp = _api_raw(next_url)
+        else:
+            resp = api_get("/me/media", token, params)
+        collected.extend([p for p in resp.get("data", []) if p.get("comments_count", 0) > 0])
+        next_url = resp.get("paging", {}).get("next")
+        if not next_url:
+            break
+    return collected[:max_total]
 
 
 def match_trigger(text, triggers):
@@ -91,11 +122,11 @@ def main(dry_run=False):
     state = load_state()
     processed = set(state.get("processed_comment_ids", []))
 
-    media_resp = api_get("/me/media", token, {"fields": "id,comments_count", "limit": "10"})
-    posts = [p for p in media_resp.get("data", []) if p.get("comments_count", 0) > 0]
+    posts = fetch_all_posts_with_comments(token, max_total=POSTS_SCAN_LIMIT)
+    log(f"Posts com comentarios encontrados: {len(posts)} (limite scan={POSTS_SCAN_LIMIT}, processar={POSTS_PROCESS_MAX})")
 
     total_processed = 0
-    for post in posts[:5]:
+    for post in posts[:POSTS_PROCESS_MAX]:
         media_id = post["id"]
         try:
             comments_resp = api_get(f"/{media_id}/comments", token, {"fields": "id,text,username", "limit": "50"})

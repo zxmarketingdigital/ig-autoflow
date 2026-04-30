@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-ig_dm_agent.py — Responde DMs recebidas no Instagram usando OmniRoute + base de conhecimento.
+ig_dm_agent.py — Responde DMs recebidas no Instagram usando Anthropic SDK + base de conhecimento.
 Roda via LaunchAgent/cron a cada N minutos.
 """
 
 import json
+import os
 import sqlite3
 import sys
 import urllib.parse
@@ -15,13 +16,16 @@ from pathlib import Path
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 from lib import (
-    IG_ENV_PATH, IG_DM_SESSIONS_PATH, INSTAGRAM_DIR,
+    IG_ENV_PATH, IG_DM_SESSIONS_PATH, IG_KB_PATH, INSTAGRAM_DIR,
     load_env_var, now_iso,
 )
+from ig_schemas import validate_products, products_to_kb_text
 
 BASE_URL = "https://graph.instagram.com/v22.0"
 LOG_FILE = INSTAGRAM_DIR / "logs" / "ig-dm.log"
 ESCALATION_KEYWORDS = ["humano", "atendente", "falar com alguem", "quero falar", "pessoa real"]
+
+CONVS_SCAN_LIMIT = int(os.environ.get("IG_CONVS_SCAN_LIMIT", "50"))
 
 
 def log(msg):
@@ -56,6 +60,11 @@ def api_get(path, token, params=None):
         return json.loads(resp.read())
 
 
+def _api_raw(url):
+    with urllib.request.urlopen(url, timeout=15) as resp:
+        return json.loads(resp.read())
+
+
 def api_post(path, token, body):
     url = f"{BASE_URL}{path}?access_token={urllib.parse.quote(token)}"
     data = json.dumps(body).encode()
@@ -64,23 +73,32 @@ def api_post(path, token, body):
         return json.loads(resp.read())
 
 
-def call_omniroute(omniroute_url, model, prompt, kb_context):
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": f"Voce e um assistente de vendas. Base de conhecimento:\n\n{kb_context}"},
-            {"role": "user", "content": prompt},
-        ],
-    }
-    data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"{omniroute_url}/v1/chat/completions",
-        data=data,
-        headers={"Content-Type": "application/json"},
+def fetch_all_conversations(token, user_id, max_total=CONVS_SCAN_LIMIT):
+    collected = []
+    next_url = None
+    params = {"platform": "instagram", "fields": "id,updated_time", "limit": "50"}
+    while len(collected) < max_total:
+        if next_url:
+            resp = _api_raw(next_url)
+        else:
+            resp = api_get(f"/{user_id}/conversations", token, params)
+        collected.extend(resp.get("data", []))
+        next_url = resp.get("paging", {}).get("next")
+        if not next_url:
+            break
+    return collected[:max_total]
+
+
+def call_anthropic(prompt, kb_context, anthropic_key=None):
+    import anthropic
+    client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else anthropic.Anthropic()
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=512,
+        system=f"Voce e um assistente de vendas amigavel. Responda de forma concisa e direta. Base de conhecimento:\n\n{kb_context}",
+        messages=[{"role": "user", "content": prompt}],
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read())
-    return result["choices"][0]["message"]["content"]
+    return response.content[0].text
 
 
 def send_whatsapp_escalation(evolution_base, instance, whatsapp_number, sender_username):
@@ -99,18 +117,21 @@ def send_whatsapp_escalation(evolution_base, instance, whatsapp_number, sender_u
 
 
 def load_kb():
-    kb_path = INSTAGRAM_DIR / "ig_knowledge_base.py"
-    if not kb_path.exists():
+    if not IG_KB_PATH.exists():
         return "Sem base de conhecimento configurada."
-    content = kb_path.read_text(encoding="utf-8")
-    return content
+    try:
+        kb_data = json.loads(IG_KB_PATH.read_text(encoding="utf-8"))
+        products = validate_products(kb_data)
+        return products_to_kb_text(products)
+    except (json.JSONDecodeError, ValueError):
+        # fallback: arquivo legado em formato Python
+        return IG_KB_PATH.read_text(encoding="utf-8")
 
 
 def main():
     token = load_env_var(IG_ENV_PATH, "IG_ACCESS_TOKEN")
     user_id = load_env_var(IG_ENV_PATH, "IG_USER_ID")
-    omniroute_url = load_env_var(IG_ENV_PATH, "OMNIROUTE_URL") or "http://localhost:8765"
-    model = load_env_var(IG_ENV_PATH, "DM_MODEL") or "gpt-4o-mini"
+    anthropic_key = load_env_var(IG_ENV_PATH, "ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     evolution_base = load_env_var(IG_ENV_PATH, "EVOLUTION_BASE") or ""
     evolution_instance = load_env_var(IG_ENV_PATH, "EVOLUTION_INSTANCE") or ""
     whatsapp_number = load_env_var(IG_ENV_PATH, "USER_WHATSAPP_NUMBER") or ""
@@ -119,20 +140,23 @@ def main():
         log("[ERRO] Credenciais ausentes em instagram.env")
         sys.exit(1)
 
+    if not anthropic_key:
+        log("[ERRO] ANTHROPIC_API_KEY nao encontrada. Configure no instagram.env ou no ambiente.")
+        sys.exit(1)
+
     kb_context = load_kb()
     db = get_db()
     cursor = db.cursor()
 
-    convs = api_get(f"/{user_id}/conversations", token, {"platform": "instagram", "fields": "id,updated_time"})
+    conversations = fetch_all_conversations(token, user_id, max_total=CONVS_SCAN_LIMIT)
+    log(f"Conversas encontradas: {len(conversations)}")
 
-    for conv in convs.get("data", []):
+    for conv in conversations:
         conv_id = conv["id"]
-        updated = conv.get("updated_time", "")
 
         cursor.execute("SELECT last_message_id, responded_at FROM sessions WHERE conversation_id=?", (conv_id,))
         row = cursor.fetchone()
         last_msg_id = row[0] if row else None
-        responded_at = row[1] if row else None
 
         msgs_resp = api_get(f"/{conv_id}", token, {"fields": "messages{id,from,message,created_time}"})
         messages = msgs_resp.get("messages", {}).get("data", [])
@@ -170,12 +194,12 @@ def main():
         else:
             log(f"Respondendo DM de @{sender}: '{msg_text[:40]}'")
             try:
-                response_text = call_omniroute(omniroute_url, model, msg_text, kb_context)
+                response_text = call_anthropic(msg_text, kb_context, anthropic_key)
                 api_post(f"/{user_id}/messages", token, {
                     "recipient": {"id": latest.get("from", {}).get("id", "")},
                     "message": {"text": response_text},
                 })
-                log(f"  [OK] Resposta enviada para @{sender}")
+                log(f"  [OK] dm_respondida para @{sender}")
             except Exception as e:
                 log(f"  [ERRO] Resposta falhou: {e}")
 
