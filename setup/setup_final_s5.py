@@ -5,6 +5,9 @@ Encerramento oficial da Semana 5.
 """
 
 import json
+import os
+import shutil
+import subprocess
 import sys
 import time
 import urllib.request
@@ -111,6 +114,69 @@ def _sep():
 
 
 # ---------------------------------------------------------------------------
+# LaunchAgent do Mission Control (regenera dashboard de hora em hora)
+# ---------------------------------------------------------------------------
+
+DASHBOARD_LABEL = "com.zxlab.ig-dashboard"
+
+
+def _install_dashboard_launchagent():
+    """Instala LaunchAgent que regenera o dashboard a cada 1 hora."""
+    if sys.platform != "darwin":
+        print("  [skip] LaunchAgent so e suportado em macOS — agendamento manual nao instalado.")
+        return False
+
+    from lib import INSTAGRAM_DIR, MISSION_CONTROL_DIR
+
+    # Garante que o gerador esta no INSTAGRAM_DIR (junto com lib.py, ig_schemas.py etc)
+    src = ROOT_DIR / "scripts" / "ig_dashboard.py"
+    dst = INSTAGRAM_DIR / "ig_dashboard.py"
+    INSTAGRAM_DIR.mkdir(parents=True, exist_ok=True)
+    MISSION_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+
+    log_path = INSTAGRAM_DIR / "logs" / "ig-dashboard.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    python_path = sys.executable or "/usr/bin/python3"
+
+    plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{DASHBOARD_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{python_path}</string>
+        <string>{dst}</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_path}</string>
+</dict>
+</plist>
+"""
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{DASHBOARD_LABEL}.plist"
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    plist_path.write_text(plist, encoding="utf-8")
+
+    # Recarrega
+    subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
+    res = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"  Aviso launchctl load: {res.stderr.strip() or res.stdout.strip()}")
+        return False
+    print(f"  LaunchAgent instalado: {DASHBOARD_LABEL}")
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -203,10 +269,23 @@ def main():
     except Exception as e:
         print(f"  Aviso: nao foi possivel salvar config.json: {e}")
 
-    # [6/6] Conclusao
+    # [6/6] Mission Control + Conclusao
     _progress(10)
-    print("  [6/6] Conclusao")
+    print("  [6/6] Gerar Mission Control Instagram + Conclusao")
     _sep()
+
+    try:
+        _install_dashboard_launchagent()
+        from ig_dashboard import render as _render_dashboard
+        from lib import open_in_browser as _open
+        dash_path = _render_dashboard()
+        print(f"  Mission Control gerado: {dash_path}")
+        print("  Atualizacao automatica: a cada 1 hora (com.zxlab.ig-dashboard)")
+        _open(dash_path)
+        print("  Aberto no navegador.")
+    except Exception as e:
+        print(f"  Aviso: nao foi possivel gerar Mission Control automaticamente ({e})")
+        print("  Voce pode rodar manualmente: python3 scripts/ig_dashboard.py --open")
     print()
 
     print("  ╔══════════════════════════════════════════════════════╗")
@@ -245,6 +324,11 @@ def main():
     print("  com.zxlab.ig-token (Token Refresh — 03h diario)")
     print(f"  Testar agora:  launchctl kickstart -k gui/{uid}/com.zxlab.ig-token")
     print(f"  Ver log:       tail -f {_IG_DIR}/logs/ig-token.log")
+    print()
+    print("  com.zxlab.ig-dashboard (Mission Control IG — a cada 1h)")
+    print(f"  Atualizar ja:  launchctl kickstart -k gui/{uid}/com.zxlab.ig-dashboard")
+    from lib import MISSION_CONTROL_DIR as _MC_DIR
+    print(f"  Abrir:         open {_MC_DIR}/instagram-dashboard.html")
     print()
     print(f"  Status geral:  python3 {_IG_DIR}/ig_auto_responder.py --status")
     print(f"  Auditoria:     python3 setup/setup_audit_s5.py --with-runtime")
