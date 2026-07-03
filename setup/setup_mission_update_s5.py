@@ -22,7 +22,10 @@ from lib import (
 MISSION_CONTROL_DIR = Path.home() / ".zxlab-mission-control"
 DASHBOARD_CANDIDATES = [
     MISSION_CONTROL_DIR / "dashboard.html",
+    MISSION_CONTROL_DIR / "index.html",
     Path.home() / ".operacao-ia" / "mission-control" / "dashboard.html",
+    # Mission Control das semanas 1-4 gera index.html
+    Path.home() / ".operacao-ia" / "mission-control" / "index.html",
 ]
 
 IG_AUTO_LOG = INSTAGRAM_DIR / "logs" / "ig-auto.log"

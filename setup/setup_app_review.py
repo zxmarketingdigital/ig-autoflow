@@ -116,7 +116,7 @@ def check_live_mode(media_id, expected_count, token):
     return len(comments) > 0
 
 
-def run_live_validation(token, user_id, media_id):
+def run_live_validation(token, user_id, media_id, expected_count=0):
     all_ok = True
 
     print("  Teste L1: Lendo comentarios de post real...")
@@ -247,7 +247,7 @@ def main():
     # --- Validacao pos-Live ---
     print("  Executando validacao pos-Live...")
     print()
-    ok = run_live_validation(token, user_id, media_id)
+    ok = run_live_validation(token, user_id, media_id, expected_count)
 
     if not ok:
         print()

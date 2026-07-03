@@ -6,11 +6,23 @@ Extende lib.py da Semana 4 com paths para automacao Instagram.
 
 import json
 import platform
+import subprocess
+import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 
 PLATFORM = platform.system()  # "Darwin", "Windows", "Linux"
+
+# Console Windows padrao e cp1252 — box-drawing/emoji dos setups causam
+# UnicodeEncodeError. Reconfigura stdout/stderr para UTF-8 quando possivel.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 BASE_DIR = Path.home() / ".operacao-ia"
 CONFIG_PATH = BASE_DIR / "config" / "config.json"
@@ -151,6 +163,51 @@ def open_in_browser(url_or_path):
             subprocess.run(["xdg-open", path_str], check=False)
     except FileNotFoundError:
         pass
+
+
+def scheduler_python():
+    """Interpretador para agendadores: pythonw no Windows (sem janela de console)."""
+    if PLATFORM == "Windows":
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        if pythonw.exists():
+            return str(pythonw)
+    return sys.executable
+
+
+def install_schtask(task_name, script_path, every_minutes=None, daily_time=None, python_path=None):
+    """Cria tarefa agendada no Windows via schtasks. Retorna (ok, detalhe)."""
+    py = python_path or scheduler_python()
+    tr = f'"{py}" "{script_path}"'
+    cmd = ["schtasks", "/Create", "/F", "/TN", task_name, "/TR", tr]
+    if every_minutes:
+        cmd += ["/SC", "MINUTE", "/MO", str(every_minutes)]
+    elif daily_time:
+        cmd += ["/SC", "DAILY", "/ST", daily_time]
+    else:
+        return False, "informe every_minutes ou daily_time"
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0:
+            return True, f"tarefa {task_name} criada"
+        return False, (result.stderr or result.stdout).strip()[:120]
+    except Exception as e:
+        return False, str(e)
+
+
+def run_schtask_and_verify(task_name, log_path, timeout=10):
+    """Dispara a tarefa agendada e verifica se o log cresceu (1a execucao)."""
+    log = Path(log_path)
+    size_before = log.stat().st_size if log.exists() else 0
+    try:
+        subprocess.run(["schtasks", "/Run", "/TN", task_name], capture_output=True, timeout=10)
+    except Exception:
+        return False, "schtasks /Run falhou"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(1)
+        if log.exists() and log.stat().st_size > size_before:
+            return True, "log atualizado"
+    return False, "nenhuma entrada nova no log"
 
 
 def mask_phone(phone):

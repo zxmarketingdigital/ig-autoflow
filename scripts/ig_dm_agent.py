@@ -108,10 +108,15 @@ def send_whatsapp_escalation(evolution_base, instance, whatsapp_number, sender_u
         "text": f"Lead no Instagram precisando de atendimento humano!\nUsuario: @{sender_username}\nResponda pelo Instagram DM.",
     }
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    # Evolution exige header apikey — sem ele o POST retorna 401
+    headers = {"Content-Type": "application/json"}
+    apikey = load_env_var(IG_ENV_PATH, "EVOLUTION_APIKEY") or ""
+    if apikey:
+        headers["apikey"] = apikey
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status == 200
+            return resp.status in (200, 201)
     except Exception:
         return False
 
@@ -148,6 +153,13 @@ def main():
     db = get_db()
     cursor = db.cursor()
 
+    # Primeira execucao: semear sessoes SEM responder — evita tratar o backlog
+    # de conversas antigas como mensagens novas e responder todas de uma vez.
+    cursor.execute("SELECT COUNT(*) FROM sessions")
+    seeding = cursor.fetchone()[0] == 0
+    if seeding:
+        log("[SEED] Primeira execucao: registrando conversas existentes sem responder.")
+
     conversations = fetch_all_conversations(token, user_id, max_total=CONVS_SCAN_LIMIT)
     log(f"Conversas encontradas: {len(conversations)}")
 
@@ -175,6 +187,18 @@ def main():
         latest = new_msgs[0]
         msg_text = latest.get("message", "")
         sender = latest.get("from", {}).get("username", latest.get("from", {}).get("id", "?"))
+
+        # Seeding: registra o ponteiro e pula (nao responde backlog).
+        # Mensagem sem texto (midia/emoji/story reply): registra e pula.
+        if seeding or not msg_text.strip():
+            if not seeding:
+                log(f"[SKIP] DM sem texto de @{sender} — registrada sem resposta.")
+            cursor.execute("""
+                INSERT OR REPLACE INTO sessions (conversation_id, last_message_id, last_seen_at, responded_at)
+                VALUES (?, ?, ?, ?)
+            """, (conv_id, latest["id"], now_iso(), None))
+            db.commit()
+            continue
 
         needs_escalation = any(kw in msg_text.lower() for kw in ESCALATION_KEYWORDS)
 
