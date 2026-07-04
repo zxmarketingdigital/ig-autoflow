@@ -15,14 +15,13 @@ sys.path.insert(0, str(ROOT_DIR / "scripts"))
 
 from lib import (
     INSTAGRAM_DIR,
+    MISSION_CONTROL_DIR,
     mark_checkpoint,
     now_iso,
 )
 
-MISSION_CONTROL_DIR = Path.home() / ".zxlab-mission-control"
 DASHBOARD_CANDIDATES = [
     MISSION_CONTROL_DIR / "dashboard.html",
-    Path.home() / ".operacao-ia" / "mission-control" / "dashboard.html",
 ]
 
 IG_AUTO_LOG = INSTAGRAM_DIR / "logs" / "ig-auto.log"
