@@ -5,6 +5,7 @@ Criar app no Meta Developers, gerar token e validar permissoes via smoke tests.
 """
 
 import json
+import os
 import sys
 import urllib.request
 import urllib.error
@@ -100,7 +101,20 @@ def save_env(app_id, app_secret, user_id, token):
         f"IG_ACCESS_TOKEN={token}\n"
         f"IG_TOKEN_GENERATED_AT={datetime.now().strftime('%Y-%m-%d')}\n"
     )
+    # Backup do .env anterior antes de sobrescrever (uma única geração de segurança)
+    if IG_ENV_PATH.exists():
+        try:
+            IG_ENV_PATH.with_suffix(IG_ENV_PATH.suffix + ".bak").write_text(
+                IG_ENV_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        except Exception:
+            pass
     IG_ENV_PATH.write_text(content, encoding="utf-8")
+    # Restringe leitura ao dono — tokens de acesso não devem vazar p/ outros usuários do FS
+    try:
+        os.chmod(IG_ENV_PATH, 0o600)
+    except Exception:
+        pass
 
 
 def fetch_user_id_from_token(token):

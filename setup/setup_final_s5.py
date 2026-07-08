@@ -166,9 +166,16 @@ def _install_dashboard_launchagent():
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_path.write_text(plist, encoding="utf-8")
 
-    # Recarrega
-    subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
-    res = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
+    # Recarrega — unload pode falhar na 1a vez (nada carregado), tolerado por design.
+    # Timeout p/ evitar hang em caso de bug no launchd.
+    subprocess.run(
+        ["launchctl", "unload", str(plist_path)],
+        capture_output=True, timeout=10,
+    )
+    res = subprocess.run(
+        ["launchctl", "load", str(plist_path)],
+        capture_output=True, text=True, timeout=10,
+    )
     if res.returncode != 0:
         print(f"  Aviso launchctl load: {res.stderr.strip() or res.stdout.strip()}")
         return False
