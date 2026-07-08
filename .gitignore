@@ -6,3 +6,5 @@ docs/api-instagram-validation.md
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+.wrangler/
+graphify-out/
