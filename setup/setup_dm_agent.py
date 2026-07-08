@@ -23,8 +23,10 @@ from lib import (
     IG_ENV_PATH,
     INSTAGRAM_DIR,
     PLATFORM,
+    install_schtask,
     load_env_var,
     mark_checkpoint,
+    run_schtask_and_verify,
 )
 
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -214,7 +216,8 @@ def _write_token_plist(python_path, script_path, log_path):
 
 
 def install_launchagents(cadencia, anthropic_key):
-    python_path = shutil.which("python3") or "python3"
+    # sys.executable e sempre o interpretador correto; "python3" nao existe no Windows
+    python_path = sys.executable
     logs_dir = INSTAGRAM_DIR / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -275,6 +278,32 @@ def install_launchagents(cadencia, anthropic_key):
         print(f"    */{cadencia} * * * * {python_path} {dm_agent_path}")
         print(f"    0 2 * * * {python_path} {token_refresher_path}")
         results["dm"] = True
+    elif PLATFORM == "Windows":
+        # DM Agent (a chave de IA e lida do instagram.env pelo proprio agente)
+        ok_dm, detail_dm = install_schtask("ZXLab-IG-DM", dm_agent_path, every_minutes=cadencia)
+        if ok_dm:
+            print(f"  [OK] Tarefa agendada criada: ZXLab-IG-DM (a cada {cadencia} min, via pythonw)")
+            print("  Verificando 1a execucao do DM agent...")
+            ran, run_detail = run_schtask_and_verify("ZXLab-IG-DM", dm_log)
+            if ran:
+                print("  [OK] 1a execucao do DM agent: OK")
+            else:
+                print(f"  [AVISO] DM agent instalado mas nao logou ({run_detail}).")
+            results["dm"] = ran
+        else:
+            print(f"  [AVISO] schtasks ig-dm falhou: {detail_dm}")
+            results["dm"] = False
+
+        # Token Refresh diario
+        if token_refresher_path.exists():
+            ok_token, detail_token = install_schtask("ZXLab-IG-Token", token_refresher_path, daily_time="03:00")
+            if ok_token:
+                print("  [OK] Tarefa agendada criada: ZXLab-IG-Token (diaria as 03:00)")
+            else:
+                print(f"  [AVISO] schtasks ig-token falhou: {detail_token}")
+            results["token"] = ok_token
+        else:
+            print("  [AVISO] ig_token_refresh.py nao encontrado, tarefa de token nao instalada.")
     else:
         print(f"  [AVISO] Plataforma {PLATFORM}: instale agendadores manualmente.")
 
@@ -373,13 +402,17 @@ def main():
 
     mark_checkpoint("step_6_dm_agent", status, detail)
 
-    uid = os.getuid() if PLATFORM == "Darwin" else "$(id -u)"
     print()
     print("  ╔══════════════════════════════════════════════════════╗")
     print("  ║  Comandos uteis apos esta etapa:                     ║")
     print("  ╚══════════════════════════════════════════════════════╝")
-    print(f"  Forcar DM agent agora:  launchctl kickstart -k gui/{uid}/com.zxlab.ig-dm")
-    print(f"  Ver log DM:             tail -f {INSTAGRAM_DIR}/logs/ig-dm.log")
+    if PLATFORM == "Windows":
+        print('  Forcar DM agent agora:  schtasks /Run /TN "ZXLab-IG-DM"')
+        print(f"  Ver log DM:             Get-Content \"{INSTAGRAM_DIR}\\logs\\ig-dm.log\" -Tail 20 -Wait")
+    else:
+        uid = os.getuid() if PLATFORM == "Darwin" else "$(id -u)"
+        print(f"  Forcar DM agent agora:  launchctl kickstart -k gui/{uid}/com.zxlab.ig-dm")
+        print(f"  Ver log DM:             tail -f {INSTAGRAM_DIR}/logs/ig-dm.log")
     print()
     print("  [OK] Etapa 6 concluida!")
     print()

@@ -23,8 +23,11 @@ from lib import (
     IG_TRIGGERS_PATH,
     INSTAGRAM_DIR,
     PLATFORM,
+    install_schtask,
     load_env_var,
     mark_checkpoint,
+    run_schtask_and_verify,
+    scheduler_python,
 )
 from ig_schemas import validate_triggers, make_trigger
 
@@ -169,7 +172,8 @@ def install_launchagent(cadencia, posts_max):
     plist_src = TEMPLATES_DIR / plist_name
 
     responder_path = INSTAGRAM_DIR / "ig_auto_responder.py"
-    python_path = shutil.which("python3") or "python3"
+    # sys.executable e sempre o interpretador correto; "python3" nao existe no Windows
+    python_path = sys.executable
     log_path = INSTAGRAM_DIR / "logs" / "ig-auto.log"
     interval = cadencia * 60
 
@@ -237,6 +241,23 @@ def install_launchagent(cadencia, posts_max):
     elif PLATFORM == "Linux":
         _install_cron(python_path, responder_path, cadencia)
         return None, True
+    elif PLATFORM == "Windows":
+        # schtasks nao suporta env por tarefa; persiste no ambiente do usuario
+        subprocess.run(["setx", "IG_POSTS_PROCESS_MAX", str(posts_max)], capture_output=True)
+        ok, detail = install_schtask("ZXLab-IG-Auto", responder_path, every_minutes=cadencia)
+        if not ok:
+            print(f"  [AVISO] schtasks falhou: {detail}")
+            return None, False
+        print(f"  [OK] Tarefa agendada criada: ZXLab-IG-Auto (a cada {cadencia} min, via pythonw)")
+        print()
+        print("  Verificando 1a execucao da tarefa...")
+        ran, run_detail = run_schtask_and_verify("ZXLab-IG-Auto", log_path)
+        if ran:
+            print("  [OK] 1a execucao da tarefa: OK")
+        else:
+            print(f"  [AVISO] Tarefa criada mas nao logou ({run_detail}).")
+            print('  Para forcar manualmente: schtasks /Run /TN "ZXLab-IG-Auto"')
+        return None, ran
     else:
         print(f"  [AVISO] Plataforma {PLATFORM}: instale manualmente o agendador.")
         return None, False
@@ -267,7 +288,7 @@ def dry_run_installed(python_path=None):
         print("  [AVISO] ig_auto_responder.py nao encontrado em destino. Pulando dry-run.")
         return False
 
-    py = python_path or shutil.which("python3") or "python3"
+    py = python_path or sys.executable
     print(f"  Executando dry-run do script instalado: {installed}")
     try:
         result = subprocess.run(
@@ -360,10 +381,15 @@ def main():
         status = "partial"
         print("  [AVISO] Etapa 4 com problemas. Verifique os logs antes de continuar.")
 
-    import os
     print()
     print(f"  Para forcar execucao agora:")
-    print(f"    launchctl kickstart -k gui/{os.getuid()}/com.zxlab.ig-auto")
+    if PLATFORM == "Darwin":
+        import os
+        print(f"    launchctl kickstart -k gui/{os.getuid()}/com.zxlab.ig-auto")
+    elif PLATFORM == "Windows":
+        print('    schtasks /Run /TN "ZXLab-IG-Auto"')
+    else:
+        print(f"    {sys.executable} {INSTAGRAM_DIR / 'ig_auto_responder.py'}")
     print()
 
     mark_checkpoint("step_4_comment_responder", status, f"keywords={len(triggers)} cadencia={cadencia}min posts_max={posts_max}")

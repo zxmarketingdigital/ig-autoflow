@@ -12,6 +12,20 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 from lib import IG_ENV_PATH, load_env_var, now_iso
 
+# No Windows a tarefa roda via pythonw (sem console) — stdout se perde.
+# log() escreve no arquivo alem de imprimir, como os demais agentes.
+_LOG_FILE = _SCRIPTS_DIR / "logs" / "ig-token.log"
+
+
+def log(msg):
+    print(msg)
+    try:
+        _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+
 
 def refresh_token(token):
     url = (
@@ -46,26 +60,26 @@ def update_env(new_token):
 def main():
     token = load_env_var(IG_ENV_PATH, "IG_ACCESS_TOKEN")
     if not token:
-        print("[ERRO] IG_ACCESS_TOKEN nao encontrado em instagram.env")
+        log("[ERRO] IG_ACCESS_TOKEN nao encontrado em instagram.env")
         sys.exit(1)
 
-    print(f"[{now_iso()}] Renovando token...")
+    log(f"[{now_iso()}] Renovando token...")
     try:
         data = refresh_token(token)
     except Exception as e:
-        print(f"[ERRO] Falha ao renovar token: {e}")
+        log(f"[ERRO] Falha ao renovar token: {e}")
         sys.exit(1)
 
     new_token = data.get("access_token")
     expires_in = data.get("expires_in", 0)
 
     if not new_token:
-        print(f"[ERRO] Resposta inesperada: {data}")
+        log(f"[ERRO] Resposta inesperada: {data}")
         sys.exit(1)
 
     update_env(new_token)
     days = expires_in // 86400
-    print(f"[OK] Token renovado. Expira em {days} dias.")
+    log(f"[OK] Token renovado. Expira em {days} dias.")
 
 
 if __name__ == "__main__":

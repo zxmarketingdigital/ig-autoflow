@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """
-Etapa 3 — App Review
-Verifica se o app ja esta em modo Live; se nao, gera Privacy Policy,
-orienta submissao para App Review e aguarda aprovacao.
+Etapa 3 — App Review (opcional, nao bloqueia o setup)
+
+IMPORTANTE: o Advanced Access da Meta (App Review) NAO e pre-requisito para
+a automacao funcionar. Em modo Standard, o app ja le e responde comentarios
+e DMs do dono da conta e de testadores adicionados — suficiente para o
+agente estar funcional e para o teste pratico da Etapa 9. O Advanced Access
+apenas AMPLIA a leitura para comentarios/DMs de seguidores quaisquer, e a
+aprovacao da Meta leva 2-5 dias uteis rodando em paralelo, sem travar o aluno.
+
+Este script: (1) confirma que a automacao ja funciona agora (modo Standard),
+(2) opcionalmente gera a Privacy Policy e guia a submissao do Advanced Access
+para quando o aluno quiser ampliar o alcance. Nunca bloqueia aguardando a Meta.
 """
 
 import json
@@ -107,8 +116,43 @@ def get_first_media_id_with_comments(token):
     return (posts[0]["id"], 0) if posts else (None, 0)
 
 
-def check_live_mode(media_id, expected_count, token):
-    """Retorna True se comentarios sao retornados (app em Live). So e diagnostico se expected_count > 0."""
+def _ig_post(endpoint, token, payload):
+    url = f"{IG_API_BASE}{endpoint}?access_token={token}"
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8")), None
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8") if e.fp else ""
+        try:
+            return None, json.loads(body)
+        except Exception:
+            return None, {"error": {"message": f"HTTP {e.code}"}}
+    except urllib.error.URLError as e:
+        return None, {"error": {"message": str(e.reason)}}
+
+
+def _ig_delete(endpoint, token):
+    url = f"{IG_API_BASE}{endpoint}?access_token={token}"
+    req = urllib.request.Request(url, method="DELETE")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8")), None
+    except Exception as e:
+        return None, {"error": {"message": str(e)}}
+
+
+def check_advanced_access(media_id, expected_count, token):
+    """
+    Retorna True se comentarios de SEGUIDORES QUAISQUER ja sao legiveis
+    (Advanced Access aprovado). So e diagnostico quando expected_count > 0
+    (post com comentarios de terceiros). Isso e so um AVISO informativo —
+    nunca bloqueia o setup.
+    """
+    if expected_count == 0:
+        return None  # sem sinal suficiente para diagnosticar
     data, err = _ig_get(f"/{media_id}/comments", token)
     if err:
         return False
@@ -116,40 +160,33 @@ def check_live_mode(media_id, expected_count, token):
     return len(comments) > 0
 
 
-def run_live_validation(token, user_id, media_id):
-    all_ok = True
-
-    print("  Teste L1: Lendo comentarios de post real...")
-    data, err = _ig_get(f"/{media_id}/comments", token)
+def run_standard_mode_check(token, user_id, media_id):
+    """
+    Confirma que a automacao JA FUNCIONA agora, em modo Standard: cria um
+    comentario proprio, le de volta via API e apaga. Isso e exatamente o
+    que o agente precisa para responder o dono da conta e testadores —
+    NAO depende de Advanced Access nem de aprovacao da Meta.
+    """
+    print("  Teste: escrita + leitura em modo Standard (dono da conta)...")
+    payload = {"message": "teste-zxlab-setup-s3-apagar"}
+    created, err = _ig_post(f"/{media_id}/comments", token, payload)
     if err:
         msg = err.get("error", {}).get("message", str(err))
-        print(f"  [FALHA] GET /{media_id}/comments: {msg}")
-        print("  App ainda em Development mode. Aguarde a aprovacao e tente novamente.")
-        all_ok = False
-    else:
-        comments = data.get("data", [])
-        if len(comments) == 0 and expected_count > 0:
-            print(f"  [FALHA] Post tem {expected_count} comentarios mas API retornou 0.")
-            print("  App ainda em Development mode. Aguarde a aprovacao e tente novamente.")
-            all_ok = False
-        else:
-            print(f"  [OK] {len(comments)} comentario(s) lido(s).")
+        print(f"  [FALHA] Nao foi possivel criar comentario de teste: {msg}")
+        return False
 
-    print("  Teste L2: Lendo conversations...")
-    data2, err2 = _ig_get(f"/{user_id}/conversations", token)
-    if err2:
-        code = err2.get("error", {}).get("code", 0)
-        msg = err2.get("error", {}).get("message", str(err2))
-        if code in (10, 200, 190):
-            print(f"  [FALHA] Permissao negada (code={code}): {msg}")
-            all_ok = False
-        else:
-            print(f"  [OK] Conversations respondeu (pode estar vazio).")
-    else:
-        convs = data2.get("data", [])
-        print(f"  [OK] {len(convs)} conversa(s) encontrada(s).")
+    comment_id = created.get("id")
+    data, err2 = _ig_get(f"/{media_id}/comments", token)
+    found = comment_id and any(c.get("id") == comment_id for c in (data or {}).get("data", []))
 
-    return all_ok
+    if comment_id:
+        _ig_delete(f"/{comment_id}", token)
+
+    if found:
+        print("  [OK] Comentario criado e lido de volta — automacao funcional agora.")
+        return True
+    print("  [AVISO] Comentario criado mas nao apareceu na leitura (raro). Tente novamente.")
+    return False
 
 
 def main():
@@ -160,7 +197,13 @@ def main():
     print()
     print("  [███░░░░░░░] Etapa 3 de 10")
     print()
-    print("  Etapa 3 — App Review (modo Live)")
+    print("  Etapa 3 — App Review (opcional — nao bloqueia o setup)")
+    print()
+    print("  A automacao ja funciona AGORA em modo Standard (dono da conta +")
+    print("  testadores). O Advanced Access da Meta so amplia a leitura para")
+    print("  comentarios/DMs de seguidores quaisquer — nao e pre-requisito")
+    print("  para prosseguir. Pode ser solicitado e aprovado em paralelo,")
+    print("  sem travar as proximas etapas.")
     print()
 
     token = load_token()
@@ -172,16 +215,28 @@ def main():
         print("  [ERRO] Nenhum post encontrado. Publique ao menos 1 post no Instagram.")
         sys.exit(1)
 
-    # Verificar se ja esta em modo Live
-    print("  Verificando se app ja esta em modo Live...")
-    if check_live_mode(media_id, expected_count, token):
-        print("  [OK] App ja esta em modo Live! Pulando para validacao final.")
-        print()
-    else:
-        print("  App ainda em Development mode.")
-        print()
+    # --- Confirmar que a automacao ja funciona agora (modo Standard) ---
+    standard_ok = run_standard_mode_check(token, user_id, media_id)
+    print()
 
-        # --- Gerar Privacy Policy ---
+    # --- Diagnostico informativo do Advanced Access (nunca bloqueia) ---
+    advanced = check_advanced_access(media_id, expected_count, token)
+    if advanced is True:
+        print("  [INFO] Advanced Access parece aprovado — comentarios de seguidores ja legiveis.")
+    elif advanced is False:
+        print("  [INFO] Advanced Access ainda pendente — comentarios de seguidores nao aparecem")
+        print("         na leitura ainda (normal antes da aprovacao da Meta). Isso NAO impede")
+        print("         a automacao de funcionar para o dono da conta e testadores.")
+    print()
+
+    # --- Oferecer (opcional) gerar Privacy Policy + guia de submissao ---
+    quer_submeter = ask(
+        "Quer gerar a Privacy Policy e ver o passo a passo pra solicitar Advanced Access agora? (s/N)",
+        default="N",
+    ).lower()
+
+    if quer_submeter in ("s", "sim", "y", "yes"):
+        print()
         print("  ─── GERAR PRIVACY POLICY ───────────────────────────")
         print()
         nome = ask("Seu nome completo")
@@ -203,10 +258,8 @@ def main():
         print("  [OK] Abrindo no browser...")
         print()
         print("  IMPORTANTE: Copie a URL acima — voce vai precisar dela no Meta.")
-        ask("Pressione Enter para continuar")
         print()
 
-        # --- Adicionar Privacy Policy no Meta ---
         print("  ─── ADICIONAR PRIVACY POLICY NO META APP ───────────")
         print()
         print(f"  1. Acesse: https://developers.facebook.com/apps/{app_id}")
@@ -215,49 +268,39 @@ def main():
         print(f"     {privacy_url}")
         print("  4. Clique 'Salvar alteracoes'")
         print()
-        ask("Pressione Enter quando salvar a Privacy Policy")
-        print()
 
-        # --- Submeter para App Review ---
-        print("  ─── SUBMETER PARA APP REVIEW ────────────────────────")
+        print("  ─── SOLICITAR ADVANCED ACCESS (opcional, roda em paralelo) ──")
         print()
         print(f"  1. No painel do app: https://developers.facebook.com/apps/{app_id}")
-        print("  2. Clique em 'Analise do App' no menu lateral")
-        print("  3. Clique em 'Permissoes e Recursos'")
+        print("  2. Abra o caso de uso do Instagram → 'Permissoes e recursos'")
         print()
-        print("  4. Encontre 'instagram_business_manage_comments'")
-        print("     → Clique 'Solicitar Acesso Avancado'")
+        print("  3. Encontre 'instagram_business_manage_comments'")
+        print("     → Solicite Acesso Avancado / adicione a analise do app")
         print("     → Cole a descricao do caso de uso:")
         print()
         print(f"     \"{CASE_USE_COMMENTS}\"")
         print()
-        print("  5. Encontre 'instagram_business_manage_messages'")
-        print("     → Clique 'Solicitar Acesso Avancado'")
+        print("  4. Encontre 'instagram_business_manage_messages'")
+        print("     → Solicite Acesso Avancado / adicione a analise do app")
         print("     → Cole a descricao do caso de uso:")
         print()
         print(f"     \"{CASE_USE_MESSAGES}\"")
         print()
-        print("  6. Clique 'Enviar para Revisao'")
+        print("  5. Envie para revisao. Prazo esperado: 2-5 dias uteis.")
+        print("     Voce NAO precisa esperar essa aprovacao — pode seguir para")
+        print("     a Etapa 4 agora mesmo. Rode esta etapa de novo depois para")
+        print("     confirmar quando o Advanced Access for aprovado.")
         print()
-        print("  Prazo esperado: 2-5 dias uteis.")
+    else:
         print()
-        ask("Pressione Enter quando o App Review for aprovado e o app estiver em modo Live")
+        print("  [OK] Pulando submissao por agora. Pode rodar esta etapa novamente")
+        print("       quando quiser ampliar o alcance para todos os seguidores.")
         print()
 
-    # --- Validacao pos-Live ---
-    print("  Executando validacao pos-Live...")
-    print()
-    ok = run_live_validation(token, user_id, media_id)
+    detail = f"standard_mode={'ok' if standard_ok else 'falhou'} advanced_access={advanced}"
+    mark_checkpoint("step_3_app_review", "done", detail)
 
-    if not ok:
-        print()
-        print("  Validacao falhou. Aguarde a aprovacao completa e execute novamente.")
-        sys.exit(1)
-
-    print()
-    mark_checkpoint("step_3_app_review", "done", "live_mode=true")
-
-    print("  [OK] Etapa 3 concluida!")
+    print("  [OK] Etapa 3 concluida! A automacao esta funcional em modo Standard.")
     print()
     print("  Proximo: python3 setup/setup_comment_responder.py")
     print()

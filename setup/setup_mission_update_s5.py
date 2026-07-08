@@ -22,6 +22,8 @@ from lib import (
 
 DASHBOARD_CANDIDATES = [
     MISSION_CONTROL_DIR / "dashboard.html",
+    # Mission Control das semanas 1-4 gera index.html
+    MISSION_CONTROL_DIR / "index.html",
 ]
 
 IG_AUTO_LOG = INSTAGRAM_DIR / "logs" / "ig-auto.log"
