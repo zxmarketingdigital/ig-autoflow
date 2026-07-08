@@ -218,24 +218,7 @@ def main():
         else:
             log(f"Respondendo DM de @{sender}: '{msg_text[:40]}'")
             try:
-                # Contexto pro agente: @ do lead + historico recente da conversa.
-                # Sem isso, so a ultima mensagem chega a IA — o agente pergunta
-                # coisas que ja sabe (nome) e repete perguntas ja respondidas.
-                history_lines = []
-                for m in reversed(messages[:8]):
-                    txt = (m.get("message") or "").strip()
-                    if not txt:
-                        continue
-                    who = "Voce (assistente)" if m.get("from", {}).get("id") == user_id else f"Lead (@{sender})"
-                    history_lines.append(f"{who}: {txt}")
-                history = "\n".join(history_lines)
-                prompt = (
-                    f"Conversa em andamento com o lead @{sender} no Instagram.\n"
-                    f"Historico recente (mais antigo primeiro):\n{history}\n\n"
-                    f"Responda a ultima mensagem do lead. Nao pergunte o nome (voce ja sabe o @) "
-                    f"e nao repita perguntas ja respondidas no historico."
-                )
-                response_text = call_anthropic(prompt, kb_context, anthropic_key)
+                response_text = call_anthropic(msg_text, kb_context, anthropic_key)
                 api_post(f"/{user_id}/messages", token, {
                     "recipient": {"id": latest.get("from", {}).get("id", "")},
                     "message": {"text": response_text},
