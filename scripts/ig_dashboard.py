@@ -236,14 +236,14 @@ def render():
         return '<span class="pill pill-mute">desconhecido</span>'
 
     triggers_html = "".join(
-        f'<tr><td><code>{", ".join(t.get("keywords", []))}</code></td>'
-        f'<td>{(t.get("reply_text") or "")[:60]}</td></tr>'
+        f'<tr><td><code>{html.escape(", ".join(str(k) for k in t.get("keywords", [])))}</code></td>'
+        f'<td>{html.escape(str(t.get("reply_text") or "")[:60])}</td></tr>'
         for t in triggers
     ) or '<tr><td colspan="2" class="empty">Nenhum trigger configurado</td></tr>'
 
     products_html = "".join(
-        f'<tr><td>{p.get("nome", "?")}</td>'
-        f'<td class="mono">{p.get("preco", "—")}</td></tr>'
+        f'<tr><td>{html.escape(str(p.get("nome", "?")))}</td>'
+        f'<td class="mono">{html.escape(str(p.get("preco", "—")))}</td></tr>'
         for p in products
     ) or '<tr><td colspan="2" class="empty">Nenhum produto na base</td></tr>'
 

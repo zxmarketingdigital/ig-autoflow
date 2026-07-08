@@ -97,6 +97,13 @@ def save_dm_config(evo_url, evo_instance, whatsapp_num, cadencia):
 def append_to_env(key, value):
     lines = []
     if IG_ENV_PATH.exists():
+        # Backup do .env antes de modificar — recover manual se algo der errado
+        try:
+            IG_ENV_PATH.with_suffix(IG_ENV_PATH.suffix + ".bak").write_text(
+                IG_ENV_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        except Exception:
+            pass
         lines = IG_ENV_PATH.read_text(encoding="utf-8").splitlines()
     existing_keys = {l.split("=")[0].strip() for l in lines if "=" in l}
     if key in existing_keys:
@@ -104,6 +111,10 @@ def append_to_env(key, value):
     else:
         lines.append(f"{key}={value}")
     IG_ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        os.chmod(IG_ENV_PATH, 0o600)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +242,9 @@ def install_launchagents(cadencia, anthropic_key):
 
     if PLATFORM == "Darwin":
         # DM Agent
+        # NOTA SEGURANÇA: ANTHROPIC_API_KEY vai em plain text no plist (~/Library/LaunchAgents/).
+        # Plist tem permissão padrão 644. Para reduzir exposição, chmod 600 abaixo.
+        # TimeMachine sem criptografia pode replicar o plist — recomendar FileVault no setup.
         env_vars = {}
         if anthropic_key:
             env_vars["ANTHROPIC_API_KEY"] = anthropic_key
@@ -239,8 +253,18 @@ def install_launchagents(cadencia, anthropic_key):
             interval_dm, str(dm_log), env_vars=env_vars or None,
         )
         try:
-            subprocess.run(["launchctl", "unload", str(plist_dm)], capture_output=True)
-            subprocess.run(["launchctl", "load", str(plist_dm)], check=True, capture_output=True)
+            os.chmod(plist_dm, 0o600)
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                ["launchctl", "unload", str(plist_dm)],
+                capture_output=True, timeout=10,
+            )
+            subprocess.run(
+                ["launchctl", "load", str(plist_dm)],
+                check=True, capture_output=True, timeout=10,
+            )
             print(f"  [OK] LaunchAgent DM instalado: {plist_dm}")
         except subprocess.CalledProcessError as e:
             print(f"  [AVISO] launchctl load ig-dm falhou: {e}")
@@ -257,8 +281,18 @@ def install_launchagents(cadencia, anthropic_key):
         if token_refresher_path.exists():
             plist_token = _write_token_plist(python_path, str(token_refresher_path), str(token_log))
             try:
-                subprocess.run(["launchctl", "unload", str(plist_token)], capture_output=True)
-                subprocess.run(["launchctl", "load", str(plist_token)], check=True, capture_output=True)
+                os.chmod(plist_token, 0o600)
+            except Exception:
+                pass
+            try:
+                subprocess.run(
+                    ["launchctl", "unload", str(plist_token)],
+                    capture_output=True, timeout=10,
+                )
+                subprocess.run(
+                    ["launchctl", "load", str(plist_token)],
+                    check=True, capture_output=True, timeout=10,
+                )
                 print(f"  [OK] LaunchAgent Token instalado: {plist_token}")
             except subprocess.CalledProcessError as e:
                 print(f"  [AVISO] launchctl load ig-token falhou: {e}")
