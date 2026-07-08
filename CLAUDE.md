@@ -38,7 +38,7 @@
 |---|---|---|
 | 1 | setup_base_s5.py | Base, pre-requisitos, estrutura de diretorios |
 | 2 | setup_meta_app.py | Credenciais Instagram, smoke tests de escrita |
-| 3 | setup_app_review.py | Privacy Policy + App Review + validacao Live mode |
+| 3 | setup_app_review.py | Confirma automacao funcional (modo Standard) + Privacy Policy/App Review opcional em paralelo |
 | 4 | setup_comment_responder.py | Palavras-chave, cadencia, install auto-responder |
 | 5 | setup_dm_kb.py | Cadastro de produtos do aluno |
 | 6 | setup_dm_agent.py | DM agent + OmniRoute + Evolution escalacao |
@@ -49,7 +49,11 @@
 
 ## Decisoes Tecnicas
 
-- App Review da Meta obrigatorio para leitura de comentarios de seguidores reais
+- App Review da Meta NAO e pre-requisito: em modo Standard o app ja le/responde
+  comentarios e DMs do dono da conta e de testadores — suficiente para o agente
+  ser funcional e para o teste pratico da Etapa 9. Advanced Access (via App
+  Review, 2-5 dias uteis) so amplia a leitura para seguidores quaisquer, e pode
+  ser solicitado em paralelo sem bloquear as etapas seguintes.
 - Privacy Policy via `https://ig-privacy-rcastro.pages.dev?name=&email=&app=` (sem Cloudflare pelo aluno)
 - Smoke tests de validacao usam operacoes de ESCRITA (create+delete comment) — mais confiaveis que leitura em Dev mode
 - OmniRoute rodando localmente (sem dependencia de cloud)
