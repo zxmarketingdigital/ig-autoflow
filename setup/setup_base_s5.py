@@ -13,6 +13,7 @@ ROOT_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
 
 from lib import (
+    CONFIG_PATH,
     INSTAGRAM_DIR,
     PLATFORM,
     WEEK5_LOGS_DIR,
@@ -41,22 +42,6 @@ def ask(prompt, secret=False, default=None):
         print()
         print("  Setup cancelado.")
         sys.exit(0)
-
-
-def check_phase(config):
-    phase = config.get("phase_completed", 0)
-    if phase < 4:
-        print()
-        print("  ATENCAO: Semanas 1, 2, 3 e 4 nao foram concluidas.")
-        print(f"  phase_completed atual: {phase} (esperado: >= 4)")
-        print()
-        print("  Conclua as semanas anteriores antes de continuar:")
-        print("    Semana 1: ~/zx-control-semana1/")
-        print("    Semana 2: ~/zx-control-semana2/")
-        print("    Semana 3: ~/zx-control-semana3/")
-        print("    Semana 4: ~/zx-control-semana4/")
-        print()
-        sys.exit(1)
 
 
 def detect_scheduler():
@@ -123,17 +108,15 @@ def main():
     print("  Nesta semana voce vai automatizar o Instagram Business.")
     print()
 
-    print("  Verificando pre-requisitos...")
-    try:
-        config = load_config()
-    except FileNotFoundError:
-        print()
-        print("  ERRO: config.json nao encontrado.")
-        print("  Execute primeiro o setup das Semanas 1 a 4.")
-        sys.exit(1)
-
-    check_phase(config)
-    print("  [OK] Semanas 1, 2, 3 e 4 concluidas.")
+    print("  Verificando o ambiente...")
+    # Este setup nao exige nenhum setup anterior: se nao existir config.json,
+    # cria o minimo; se existir uma instalacao anterior, aproveita o que for valido.
+    existia = CONFIG_PATH.exists()
+    config = load_config()
+    if existia:
+        print("  [OK] Instalacao anterior encontrada — aproveitando o que for valido.")
+    else:
+        print("  [OK] Primeira instalacao — config.json minimo criado.")
     print()
 
     print(f"  Sistema operacional: {PLATFORM}")

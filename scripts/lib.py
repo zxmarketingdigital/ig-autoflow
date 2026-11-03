@@ -5,7 +5,10 @@ Extende lib.py da Semana 4 com paths para automacao Instagram.
 """
 
 import json
+import os
 import platform
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -90,13 +93,99 @@ def ensure_structure():
         path.mkdir(parents=True, exist_ok=True)
 
 
-def load_config():
-    if not CONFIG_PATH.exists():
-        raise FileNotFoundError("config.json nao encontrado em ~/.operacao-ia/config/")
+def minimal_config():
+    """Config minimo para quem instala este setup sem ter feito nenhum outro."""
+    return {"phase_completed": 0, "platform": PLATFORM}
+
+
+class ConfigBackupError(OSError):
+    """Nao foi possivel guardar copia de seguranca do config; o original NAO foi tocado."""
+
+
+def backup_config_copy(path):
+    """Copia (copy2) o config para <nome>.bak-<AAAAmmdd-HHMMSS>[-N], sem sobrescrever backup existente.
+
+    Confere que o destino existe com o mesmo tamanho. Em falha, o original fica intacto
+    e levanta ConfigBackupError (so entao o chamador pode recriar o config).
+    """
+    path = Path(path)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = None
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"config.json invalido (JSON malformado): {exc}") from exc
+        n = 0
+        while backup is None:
+            candidate = path.with_name(f"{path.name}.bak-{stamp}" + (f"-{n}" if n else ""))
+            try:
+                # O_EXCL: a criação é atômica; se outro processo pegou o nome, tenta o próximo sufixo.
+                fd = os.open(str(candidate), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                n += 1
+                continue
+            backup = candidate
+            with os.fdopen(fd, "wb") as dst, open(str(path), "rb") as src:
+                shutil.copyfileobj(src, dst)
+            os.chmod(str(backup), 0o600)  # backup nunca herda permissao aberta do original
+        if not backup.is_file() or backup.stat().st_size != path.stat().st_size:
+            raise OSError("copia de seguranca incompleta")
+    except OSError as e:
+        try:
+            if backup is not None and backup.is_file():
+                backup.unlink()
+        except OSError:
+            pass
+        msg = (f"Não consegui salvar uma cópia de segurança de {path}: {e}. "
+               "Verifique a permissão da pasta e rode de novo.")
+        print(f"  [ERRO] {msg}")
+        raise ConfigBackupError(msg) from e
+    return backup
+
+
+def load_config():
+    """Le o config.json. Nunca falha por ausencia ou corrupcao.
+
+    - Ausente: cria o minimo (este setup nao exige instalacao anterior).
+    - Corrompido: guarda copia em config.json.bak-<timestamp> e recria o minimo.
+    - Valido: devolve como esta (aproveita o que uma instalacao anterior deixou).
+    """
+    if not CONFIG_PATH.exists():
+        config = minimal_config()
+        save_config(config)
+        return config
+    try:
+        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+        raise ValueError("config.json nao e um objeto JSON")
+    except (ValueError, OSError, RecursionError):
+        backup = backup_config_copy(CONFIG_PATH)  # ConfigBackupError: original fica intacto
+        print(f"  [AVISO] config.json invalido — copia guardada em {backup.name}; recriado do zero.")
+        config = minimal_config()
+        save_config(config)
+        return config
+
+
+def _parse_phase(value):
+    """Interpreta phase_completed de forma tolerante: 5, 5.0, "5", "week5", "semana 5", "phase5". Invalido = 0."""
+    if isinstance(value, bool):
+        return 0
+    try:
+        number = float(value)
+    except OverflowError:
+        number = float("inf") if value > 0 else 0.0  # inteiro gigante: maior que qualquer fase, nunca sobrescreve
+    except (TypeError, ValueError):
+        achou = re.search(r"\d+(?:\.\d+)?", str(value))
+        number = float(achou.group()) if achou else 0
+    if number != number or number == float("-inf"):
+        return 0
+    return number
+
+
+def set_phase_completed(config, phase):
+    """phase_completed nunca regride: so grava se `phase` for maior que o valor atual."""
+    atual = _parse_phase(config.get("phase_completed", 0))
+    if phase > atual:
+        config["phase_completed"] = phase
+    return config.get("phase_completed", phase)
 
 
 def save_config(config):

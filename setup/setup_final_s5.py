@@ -23,10 +23,12 @@ import session_logger
 from lib import (
     CHECKPOINT_PATH_S5,
     DATA_DIR,
+    ConfigBackupError,
     load_config,
     mark_checkpoint,
     now_iso,
     save_config,
+    set_phase_completed,
 )
 
 PENDING_PATH = DATA_DIR / "logs" / "pending_push_s5.json"
@@ -197,6 +199,8 @@ def main():
 
     try:
         config = load_config()
+    except ConfigBackupError:
+        sys.exit(1)  # mensagem ja impressa; config original intacto
     except (FileNotFoundError, ValueError) as exc:
         print(f"  Aviso: config.json indisponivel ({exc}). Continuando sem Supabase.")
         config = {}
@@ -265,16 +269,20 @@ def main():
     print("  [5/6] Atualizar config.json")
     _sep()
 
-    config["phase_completed"] = 5
-    config["week5"] = {
-        "completed": True,
-        "completed_at": now_iso(),
-    }
+    set_phase_completed(config, 5)
+    week5 = config.get("week5")
+    if not isinstance(week5, dict):
+        week5 = {}
+    week5["completed"] = True
+    week5["completed_at"] = now_iso()
+    config["week5"] = week5
     try:
         save_config(config)
-        print("  config.json atualizado: phase_completed=5, week5.completed=True")
+        print(f"  config.json atualizado: phase_completed={config['phase_completed']}, week5.completed=True")
     except Exception as e:
-        print(f"  Aviso: nao foi possivel salvar config.json: {e}")
+        print(f"  ERRO: nao foi possivel salvar config.json: {e}")
+        print("  A instalacao NAO foi registrada como concluida. Verifique espaco em disco/permissoes e rode de novo.")
+        sys.exit(1)
 
     # [6/6] Mission Control + Conclusao
     _progress(10)

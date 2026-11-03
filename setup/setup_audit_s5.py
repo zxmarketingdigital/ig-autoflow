@@ -20,6 +20,7 @@ ROOT_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
 
 from lib import (
+    CONFIG_PATH,
     IG_DM_SESSIONS_PATH,
     IG_ENV_PATH,
     IG_KB_PATH,
@@ -28,7 +29,6 @@ from lib import (
     PLATFORM,
     ensure_structure,
     load_checkpoint,
-    load_config,
     load_env_var,
     mark_checkpoint,
 )
@@ -64,16 +64,17 @@ def check_claude_cli():
 
 
 def check_config_phase():
+    """Informativo e somente leitura: este setup nao exige nenhum setup anterior."""
     try:
-        config = load_config()
+        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            raise ValueError("nao e um objeto JSON")
         phase = config.get("phase_completed", 0)
-        if phase >= 4:
-            return "OK", f"phase_completed={phase}"
-        return "AVISO", f"phase_completed={phase} (esperado >= 4) — para avançar: jq '.phase_completed = 4' ~/.operacao-ia/config/config.json | sponge ~/.operacao-ia/config/config.json"
+        return "OK", f"config.json presente (phase_completed={phase}); nenhum setup anterior e exigido"
     except FileNotFoundError:
-        return "AVISO", "config.json nao encontrado"
-    except Exception as e:
-        return "ERRO", str(e)
+        return "AVISO", "config.json ainda nao existe; o setup cria o minimo"
+    except (ValueError, OSError, RecursionError) as e:
+        return "AVISO", f"config.json indisponivel ({e}); o setup guarda copia e recria o minimo"
 
 
 def check_ig_env():
@@ -257,7 +258,7 @@ def check_disparo_end_to_end():
 
 CHECKS_BASE = [
     ("Claude Code CLI",                check_claude_cli),
-    ("Config.json phase >= 4",         check_config_phase),
+    ("Config.json (informativo)",      check_config_phase),
     ("instagram.env existe",           check_ig_env),
     ("IG_ACCESS_TOKEN valido",         check_token_valid),
     ("IG_USER_ID bate com token",      check_user_id_match),

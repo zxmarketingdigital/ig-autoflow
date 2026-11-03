@@ -27,7 +27,7 @@
 
 - **Produto:** ZX Control — Mentoria de 30 dias
 - **Semana 5:** Automacao Instagram (10 etapas)
-- **Pré-requisito:** Semanas 1-4 concluídas (phase_completed >= 4)
+- **Pré-requisito:** nenhum setup anterior. Não exige setup anterior — se você já tem outro setup instalado, ele aproveita o que estiver válido (`config.json` ausente é criado no mínimo na Etapa 1; `phase_completed` nunca regride)
 - **Pasta base:** `~/.operacao-ia/`
 - **Scripts IG:** `~/.operacao-ia/scripts/instagram/`
 - **Repo local:** `~/ig-autoflow/`
@@ -36,7 +36,7 @@
 
 | # | Script | O que faz |
 |---|---|---|
-| 1 | setup_base_s5.py | Base, pre-requisitos, estrutura de diretorios |
+| 1 | setup_base_s5.py | Base, diagnostico do ambiente, config.json minimo (se ausente), estrutura de diretorios |
 | 2 | setup_meta_app.py | Credenciais Instagram, smoke tests de escrita |
 | 3 | setup_app_review.py | Confirma automacao funcional (modo Standard) + Privacy Policy/App Review opcional em paralelo |
 | 4 | setup_comment_responder.py | Palavras-chave, cadencia, install auto-responder |
@@ -45,7 +45,7 @@
 | 7 | setup_mission_update_s5.py | Mission Control 5.0 com widgets Instagram |
 | 8 | setup_audit_s5.py | 11 checks com auto-fix opt-in |
 | 9 | setup_teste_pratico.py | Teste ao vivo — ciclo completo comentario→DM |
-| 10 | setup_final_s5.py | Encerramento + Supabase log + phase_completed=5 |
+| 10 | setup_final_s5.py | Encerramento + Supabase log (opcional) + phase_completed=max(atual, 5) |
 
 ## Decisoes Tecnicas
 
